@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Parent is a FRAMEWORK theme, not AppCompat: DoseAlarmActivity extends
+  android.app.Activity so that it can inflate without any AndroidX theme machinery being
+  initialised first. An AppCompat parent here would crash the activity at inflate time.
+-->
+<resources>
+    <style name="Theme.MedAlarm.DoseAlarm" parent="@android:style/Theme.Material.NoActionBar">
+        <item name="android:windowBackground">@color/med_alarm_bg</item>
+        <item name="android:statusBarColor">@color/med_alarm_bg</item>
+        <item name="android:navigationBarColor">@color/med_alarm_bg</item>
+        <item name="android:windowNoTitle">true</item>
+        <!-- No enter animation: the point is to be on screen already when the user looks. -->
+        <item name="android:windowAnimationStyle">@null</item>
+    </style>
+</resources>

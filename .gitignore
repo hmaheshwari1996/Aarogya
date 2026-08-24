@@ -1,0 +1,70 @@
+# ── Generated native projects ────────────────────────────────────────────────
+# This is a CNG / prebuild project: app.config.ts is the source of truth and
+# android/ is derived output that scripts/build-android.sh deletes and
+# regenerates on every release build. Checking it in guarantees that the tree
+# and the config disagree, silently, on somebody else's machine.
+#
+# ANCHORED WITH A LEADING SLASH, AND THAT MATTERS ENORMOUSLY.
+#
+# A bare `android/` is not a path — git matches it at EVERY depth. It therefore
+# also matched `modules/med-alarm/android/`, which is not generated output at
+# all: it is the hand-written Kotlin alarm layer, fourteen files including the
+# AlarmManager scheduling, the boot receiver and the looping alarm player. The
+# most important native code in the project was invisible to `git add -A`, and
+# because the repo had no commits yet nothing had surfaced it.
+#
+# Anchoring confines each rule to the repository root, where the generated
+# projects actually live. Only the module's own build output is ignored below.
+/android/
+/ios/
+
+# The local Expo module's build output — generated, unlike its src/ beside it.
+modules/*/android/build/
+modules/*/android/.cxx/
+modules/*/android/.gradle/
+
+# ── Build artifacts ──────────────────────────────────────────────────────────
+build-output/
+*.apk
+*.aab
+
+# ── Signing material — NEVER commit ──────────────────────────────────────────
+# Losing this keystore means the next build cannot update the app in place, and
+# the only remaining path is uninstall + reinstall, which erases the only copy
+# of the user's health history. Committing it is the other half of that
+# disaster: anyone with the repo can then sign an APK that Android will happily
+# install over the real one. See docs/SIGNING.md.
+*.jks
+*.keystore
+*.p12
+*.p8
+*.mobileprovision
+keystore.properties
+
+# ── Secrets / environment ────────────────────────────────────────────────────
+.env
+.env.*
+!.env.example
+
+# ── Dependencies & caches ────────────────────────────────────────────────────
+node_modules/
+.expo/
+.expo-shared/
+dist/
+web-build/
+*.tsbuildinfo
+.eslintcache
+
+# ── Dev database dumps produced by scripts/seed-dev-data.ts ──────────────────
+*.dev.db
+*.dev.db-wal
+*.dev.db-shm
+
+# ── OS / editor noise ────────────────────────────────────────────────────────
+.DS_Store
+*.log
+npm-debug.log*
+yarn-error.log*
+.idea/
+.vscode/
+*.swp

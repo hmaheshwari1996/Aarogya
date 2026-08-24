@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Deliberately empty.
+
+  The receivers, the DoseAlarmActivity, the <queries> block and
+  USE_FULL_SCREEN_INTENT are all registered into the APPLICATION manifest by
+  plugins/withAlarmReceivers.js, not here. Declaring them in the library manifest
+  as well would mean two sources of truth for the same components, and manifest
+  merger conflicts (differing android:exported values, for instance) surface as
+  opaque build failures rather than as an obvious diff.
+-->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android" />

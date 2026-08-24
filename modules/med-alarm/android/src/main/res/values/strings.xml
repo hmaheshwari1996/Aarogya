@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  These strings are posted by native code that runs with no React tree, so they cannot
+  come from src/i18n. They live here, in the Android resource system, which picks the
+  right language from the device locale on its own — see values-hi/strings.xml.
+
+  Keep them short: they render on notification action buttons, which truncate hard.
+-->
+<resources>
+    <string name="med_alarm_action_taken">Taken</string>
+    <!-- %1$d is the snooze length in minutes. -->
+    <string name="med_alarm_action_snooze">Snooze %1$d min</string>
+
+    <string name="med_alarm_unknown_title">Medicine reminder</string>
+    <string name="med_alarm_unknown_body">Open Aarogya to see which medicine this was.</string>
+
+    <string name="med_alarm_test_title">Test reminder</string>
+    <string name="med_alarm_test_body">If you can see and hear this, reminders are working on this phone.</string>
+
+    <string name="med_alarm_notice_horizon_title">Open Aarogya to restore your reminders</string>
+    <string name="med_alarm_notice_horizon_body">Aarogya could not read your reminder schedule, so some reminders may not arrive. Open the app once to restore them.</string>
+
+    <string name="med_alarm_notice_journal_title">Could not record — open the app</string>
+    <string name="med_alarm_notice_journal_body">Aarogya could not save your last response, most likely because this phone is out of storage. Open the app and record it there.</string>
+
+    <string name="med_alarm_notice_exact_title">Reminders may arrive late</string>
+    <string name="med_alarm_notice_exact_body">Aarogya is not allowed to set exact alarms on this phone, so reminders may be delayed. Open the app and run the Reminder Health Check.</string>
+</resources>

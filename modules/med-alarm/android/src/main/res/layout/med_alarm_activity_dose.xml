@@ -1,0 +1,69 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  The full-screen critical-dose alarm.
+
+  Deliberately plain: no ConstraintLayout, no data binding, no vector art beyond the
+  small icon. Everything here inflates from the framework alone, because this screen has
+  to appear on a locked phone in milliseconds, from a process that was dead a moment ago.
+
+  Sizes are large on purpose. The person reading this may be 70, without their glasses,
+  in a dark room, at 06:00.
+-->
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:orientation="vertical"
+    android:gravity="center"
+    android:background="@color/med_alarm_bg"
+    android:padding="24dp">
+
+    <TextView
+        android:id="@+id/med_alarm_time"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:textSize="20sp"
+        android:letterSpacing="0.08"
+        android:textColor="@color/med_alarm_muted"
+        android:layout_marginBottom="12dp" />
+
+    <TextView
+        android:id="@+id/med_alarm_title"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:gravity="center"
+        android:textSize="34sp"
+        android:textStyle="bold"
+        android:lineSpacingMultiplier="1.1"
+        android:textColor="@color/med_alarm_fg" />
+
+    <TextView
+        android:id="@+id/med_alarm_body"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:gravity="center"
+        android:textSize="20sp"
+        android:layout_marginTop="12dp"
+        android:layout_marginBottom="40dp"
+        android:textColor="@color/med_alarm_muted" />
+
+    <Button
+        android:id="@+id/med_alarm_taken"
+        android:layout_width="match_parent"
+        android:layout_height="72dp"
+        android:text="@string/med_alarm_action_taken"
+        android:textSize="22sp"
+        android:textAllCaps="false"
+        android:textColor="@color/med_alarm_on_accent"
+        android:background="@color/med_alarm_accent" />
+
+    <Button
+        android:id="@+id/med_alarm_snooze"
+        android:layout_width="match_parent"
+        android:layout_height="64dp"
+        android:layout_marginTop="16dp"
+        android:textSize="20sp"
+        android:textAllCaps="false"
+        android:textColor="@color/med_alarm_fg"
+        android:background="@color/med_alarm_surface" />
+
+</LinearLayout>

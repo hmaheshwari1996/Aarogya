@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Hindi. Selected by the Android resource system from the device locale, with no help
+  from JS — which matters, because these strings are posted from a process that has no
+  React tree running.
+-->
+<resources>
+    <string name="med_alarm_action_taken">ले ली</string>
+    <string name="med_alarm_action_snooze">%1$d मिनट बाद</string>
+
+    <string name="med_alarm_unknown_title">दवा का रिमाइंडर</string>
+    <string name="med_alarm_unknown_body">कौन सी दवा थी, यह देखने के लिए आरोग्य खोलें।</string>
+
+    <string name="med_alarm_test_title">टेस्ट रिमाइंडर</string>
+    <string name="med_alarm_test_body">अगर यह दिख और सुनाई दे रहा है, तो इस फ़ोन पर रिमाइंडर काम कर रहे हैं।</string>
+
+    <string name="med_alarm_notice_horizon_title">रिमाइंडर वापस चालू करने के लिए आरोग्य खोलें</string>
+    <string name="med_alarm_notice_horizon_body">आरोग्य आपका रिमाइंडर शेड्यूल नहीं पढ़ पाया, इसलिए कुछ रिमाइंडर नहीं आ सकते। एक बार ऐप खोलें।</string>
+
+    <string name="med_alarm_notice_journal_title">रिकॉर्ड नहीं हो सका — ऐप खोलें</string>
+    <string name="med_alarm_notice_journal_body">आरोग्य आपका पिछला जवाब सेव नहीं कर पाया, शायद फ़ोन में जगह नहीं है। ऐप खोलकर उसे दर्ज करें।</string>
+
+    <string name="med_alarm_notice_exact_title">रिमाइंडर देर से आ सकते हैं</string>
+    <string name="med_alarm_notice_exact_body">इस फ़ोन पर आरोग्य को सटीक अलार्म लगाने की अनुमति नहीं है। ऐप खोलकर रिमाइंडर हेल्थ चेक चलाएँ।</string>
+</resources>

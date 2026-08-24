@@ -1,0 +1,39 @@
+apply plugin: 'com.android.library'
+
+group = 'in.aarogya.medalarm'
+version = '0.1.0'
+
+// Pulls in `applyKotlinExpoModulesCorePlugin`, `useCoreDependencies` and
+// `useDefaultAndroidSdkVersions`, so this module inherits compileSdk/minSdk/targetSdk
+// from the app (set by expo-build-properties in app.config.ts: 26/36/36) instead of
+// pinning its own and drifting.
+def expoModulesCorePlugin = new File(
+  project(":expo-modules-core").projectDir.absolutePath,
+  "ExpoModulesCorePlugin.gradle"
+)
+apply from: expoModulesCorePlugin
+applyKotlinExpoModulesCorePlugin()
+useCoreDependencies()
+useDefaultAndroidSdkVersions()
+
+android {
+  // `in` is a Kotlin keyword but NOT a Java one, so the generated R class in
+  // `in.aarogya.medalarm` is legal. Kotlin sources in this module must still write
+  // the package declaration with backticks: package `in`.aarogya.medalarm
+  namespace "in.aarogya.medalarm"
+
+  defaultConfig {
+    versionCode 1
+    versionName "0.1.0"
+  }
+
+  lint {
+    abortOnError false
+  }
+}
+
+dependencies {
+  // NotificationCompat / ContextCompat. Already on the classpath via React Native,
+  // but a library module must declare what it compiles against.
+  implementation "androidx.core:core-ktx:1.13.1"
+}

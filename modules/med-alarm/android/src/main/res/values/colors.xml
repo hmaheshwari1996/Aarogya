@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Prefixed `med_alarm_` so nothing here can collide with a colour the app defines.
+
+  DARK BY DESIGN, NOT BY THEME. This screen exists to appear at night, and a
+  full-brightness white rectangle at 06:00 is its own kind of alarm. It therefore does
+  not follow the device's light/dark setting — unlike every other surface in the app.
+
+  KEPT IN STEP WITH `darkColors` IN src/theme/index.ts, BY HAND. These are Android
+  resources compiled into the module at build time; they cannot import the TypeScript
+  palette. When that palette moves, these move with it — otherwise the one screen the
+  patient sees at 06:00, half awake, looks like a different app from the one she used
+  the night before. That is a small thing everywhere else and not a small thing here.
+
+  Contrast, measured against `med_alarm_bg` (#262220):
+    fg      #F2EEE7  → 12.8:1   (body and the medicine name; WCAG AA asks 4.5)
+    muted   #C3BBB1  →  7.7:1   (the time and the dose line)
+    accent  #5FD3BC  →  8.5:1   (the "I took it" button fill)
+  and `on_accent` #052019 on that accent → 7.6:1.
+
+  Every pair clears AA comfortably, which is the intent: this is read by an elderly
+  patient without her glasses, in the dark, under time pressure.
+-->
+<resources>
+    <color name="med_alarm_bg">#262220</color>
+    <color name="med_alarm_surface">#34302B</color>
+    <color name="med_alarm_fg">#F2EEE7</color>
+    <color name="med_alarm_muted">#C3BBB1</color>
+    <color name="med_alarm_accent">#5FD3BC</color>
+    <color name="med_alarm_on_accent">#052019</color>
+</resources>

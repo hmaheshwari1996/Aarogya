@@ -1,0 +1,6 @@
+{
+  "platforms": ["android"],
+  "android": {
+    "modules": ["in.aarogya.medalarm.MedAlarmModule"]
+  }
+}

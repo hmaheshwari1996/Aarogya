@@ -226,7 +226,7 @@ import {
 } from '@/components/ui';
 import type { OccurrenceStatus, Reading, TargetRange } from '@/types';
 import { toLocalDate } from '@/lib/datetime';
-import { getDefaultProfile } from '@/db/repositories/profiles';
+import { getProfile } from '@/db/repositories/profiles';
 import { getLatestReading, listRecentReadings } from '@/db/repositories/readings';
 import { listTargets } from '@/db/repositories/targets';
 import { listOccurrencesForDate } from '@/db/repositories/occurrences';
@@ -248,6 +248,7 @@ import {
   matchTarget,
   metricUnit,
   rangeFor,
+  resolveProfileId,
   targetFootnote,
   trimNumber,
   useAsync,
@@ -539,9 +540,16 @@ type TodayData = {
 };
 
 async function loadToday(lang: 'en' | 'hi'): Promise<TodayData | null> {
-  const profile = await getDefaultProfile();
+  // The ACTIVE (viewed) profile, not the default. With multiple patients on one phone these
+  // diverge the moment she switches to grandmother, and Today is where the quick-entry tiles
+  // live — a home screen showing mother's readings while a BP tile writes to grandmother (the
+  // entry screens all resolve the active profile) is exactly the wrong-patient error the
+  // profile pointer exists to prevent. `resolveProfileId` re-reads the pointer after a switch
+  // invalidates the memo, and this screen reloads on focus, so switching swings Today too.
+  const profileId = await resolveProfileId();
+  if (!profileId) return null;
+  const profile = await getProfile(profileId);
   if (!profile) return null;
-  const profileId = profile.id;
   const today = toLocalDate();
 
   const [
@@ -589,7 +597,10 @@ async function loadToday(lang: 'en' | 'hi'): Promise<TodayData | null> {
     doses.push({
       occurrenceId: occurrence.id,
       medicineName: name,
-      timeLocal: occurrence.timeLocal,
+      // The EFFECTIVE time: a dose moved for today only (per-day override, item 1) shows and
+      // sorts by where it will actually ring — "Next at 10:00", not the untouched slot's 8:00.
+      // Ordering already keys on `scheduledAtEpoch`, which the override re-derives in place.
+      timeLocal: occurrence.overrideTimeLocal ?? occurrence.timeLocal,
       scheduledAtEpoch: occurrence.scheduledAtEpoch,
       // Recomputed from the events rather than read off `occurrence.status`: the cached
       // column can be one drain behind, and a stale "waiting" on a dose she answered

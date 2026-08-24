@@ -17,7 +17,6 @@ import React, { useCallback, useState } from 'react';
 import { View } from 'react-native';
 import { useRouter } from 'expo-router';
 
-import { useI18n } from '@/i18n';
 import { radii, spacing } from '@/theme';
 import { useTheme } from '@/theme/ThemeProvider';
 import { Chip, Screen, ScreenHeader, SectionHeader, Skeleton, Text, TextField, useToast } from '@/components/ui';
@@ -40,11 +39,6 @@ const SETUP_STEPS = 7;
 const STRINGS: LocalStrings = {
   'setup.stepOf': { en: 'Step {{step}} of {{total}}', hi: 'कुल {{total}} में से कदम {{step}}' },
   'setup.welcome': { en: 'Welcome to Aarogya', hi: 'आरोग्य में आपका स्वागत है' },
-  'setup.language.title': { en: 'Choose your language', hi: 'अपनी भाषा चुनें' },
-  // Deliberately identical in both bundles: a language name is only useful to someone
-  // who can already read it.
-  'setup.language.english': { en: 'English', hi: 'English' },
-  'setup.language.hindi': { en: 'हिंदी', hi: 'हिंदी' },
   'setup.whose.title': { en: 'Who will use this phone?', hi: 'इस फ़ोन को कौन चलाएगा?' },
   'setup.whose.patient': {
     en: 'I take the medicines myself',
@@ -103,7 +97,6 @@ export default function SetupLanguageScreen() {
   const router = useRouter();
   const toast = useToast();
   const t = useT(STRINGS);
-  const { lang, setLang } = useI18n();
 
   // The registry seed runs before anything else in the app's life: `createReading()`
   // refuses an unknown metric_key, so without it the four entry tiles cannot write.
@@ -198,24 +191,10 @@ export default function SetupLanguageScreen() {
       <StepDots step={1} />
       <ScreenHeader title={t('setup.welcome')} />
 
-      <View style={{ gap: spacing.md }}>
-        <Text variant="label">{t('setup.language.title')}</Text>
-        <Chip
-          label={t('setup.language.english')}
-          selected={lang === 'en'}
-          onPress={() => setLang('en')}
-          selectionMode="single"
-          grow
-        />
-        <Chip
-          label={t('setup.language.hindi')}
-          selected={lang === 'hi'}
-          onPress={() => setLang('hi')}
-          selectionMode="single"
-          grow
-        />
-      </View>
-
+      {/* Language is chosen on the first-run pre-step (`setup/language.tsx`, item 8), so it is
+          deliberately NOT asked again here — a second en/hi chip pair would either double-ask
+          or, for an optional-language user whose base reduces to 'en', show 'English' selected
+          under a Bengali UI. Settings › Language changes it afterwards. */}
       <SectionHeader title={t('setup.whose.title')} />
       <View style={{ gap: spacing.md }}>
         <Chip

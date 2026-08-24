@@ -167,6 +167,9 @@ tbody tr:nth-child(even) td { background: #FAFAFA; }
 
 /* ── Symptoms, labs, questions ───────────────────────────────────────────── */
 .timeline-dates { font-size: 8.4pt; }
+.note-row td { padding-top: 0; border-top: 0; }
+.symptom-notes { margin: 0 0 2pt 0; padding-left: 12pt; font-size: 8.4pt; color: #333; }
+.symptom-notes li { margin: 0; }
 .tag {
   display: inline-block;
   border: 1px solid #666;

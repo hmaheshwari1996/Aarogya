@@ -61,7 +61,7 @@ npm run check:all       # typecheck + check:i18n + check:clinical + check:bundle
 ```
 
 **`check:all` does NOT run `lint` or `test`.** Run those separately, every time. Baseline
-to hold: tsc clean, eslint 0/0, 629 tests passing, i18n 559 = 559, clinical clean.
+to hold: tsc clean, eslint 0/0, 655 tests passing, i18n 559 = 559, clinical clean.
 
 `i18n 559 = 559` counts `src/i18n/*.json` and does NOT move when a screen gains copy —
 new strings belong in that screen's `LocalStrings` map (see UI conventions). A jump in
@@ -114,7 +114,13 @@ In `src/features/dosing/`:
   materialise an occurrence whose moment has passed unless a row already exists. **Rule B:**
   retire stale same-day occurrences from the old slot time first, same transaction, and only
   those with nothing recorded. Window 2 days back / 14 forward — what the UI draws, not what
-  the alarms depend on.
+  the alarms depend on. **The published horizon is DEVICE-wide, never one profile's**
+  (`deviceHorizon.ts`): `reconcile` does per-profile DB work but publishes the UNION of
+  `buildAlarmRules` over every non-archived profile (safety rule R1), so switching the viewed
+  profile cannot overwrite the file and silence another patient's TB dose. A per-day dose-time
+  move lives in `dose_occurrence.override_time_local` and reaches reconcile through
+  `override.ts::effectiveScheduledEpoch` (R2); the native ring still fires at the rule time
+  until `Materializer.kt` learns per-date exceptions (see the note in `override.ts`).
 - `journalDrain.ts` — parses, inserts and unlinks **each record independently**. One bad
   record in a batched transaction fails forever and holds every dose behind it out of the
   database; unplaceable records go to `dose_event_quarantine` and are unlinked.
@@ -143,7 +149,7 @@ Kotlin only ever *reads* them.
 ## Database — `src/db/`
 
 `migrations.ts` is **append-only**: a migration's `version` equals its 1-based position in
-`MIGRATIONS`, and `LATEST_VERSION = MIGRATIONS.length`. **Currently 6.** Never edit an
+`MIGRATIONS`, and `LATEST_VERSION = MIGRATIONS.length`. **Currently 7.** Never edit an
 existing one. Add-only statements; the single DROP exception must be argued in the migration
 and needs both halves — referenced by no code AND unable to hold user data on any install
 that will run it (see v3). A backfill on an append-only table lifts its guard trigger with

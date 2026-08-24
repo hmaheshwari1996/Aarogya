@@ -40,6 +40,7 @@ import {
   Skeleton,
   Text,
 } from '@/components/ui';
+import { ActiveProfileTag } from '@/app/profiles/_lib';
 import { addDays, toLocalDate, wallClockToEpoch } from '@/lib/datetime';
 import {
   METRIC_BP,
@@ -237,7 +238,15 @@ export function TimeStepper({
         {label}
       </Text>
       {key('minus', minusLabel, () => onChange(shiftWallClock(value, -delta)))}
-      <Text variant="title" align="center" style={{ minWidth: 56 }}>
+      {/* Labelled live region so TalkBack speaks '<Hour|Minute> <value>' on every step;
+          a bare '08' next to the caption reads without a unit and steps announce nothing. */}
+      <Text
+        variant="title"
+        align="center"
+        style={{ minWidth: 56 }}
+        accessibilityLiveRegion="polite"
+        accessibilityLabel={`${label} ${shownValue}`}
+      >
         {shownValue}
       </Text>
       {key('plus', plusLabel, () => onChange(shiftWallClock(value, delta)))}
@@ -638,6 +647,10 @@ export default function BackfillScreen() {
         subtitle={t('entry.backfill.subtitle')}
         onBack={() => (router.canGoBack() ? router.back() : router.replace('/'))}
       />
+
+      {/* Whose record this is — the active profile is a device-global pointer a carer can
+          have switched, and back-dating fills real health data. No-ops when solo. */}
+      <ActiveProfileTag />
 
       <Card>
         <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing.md }}>

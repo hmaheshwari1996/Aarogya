@@ -48,6 +48,7 @@ import {
   useToast,
   type NumberPadField,
 } from '@/components/ui';
+import { ActiveProfileTag } from '@/app/profiles/_lib';
 import {
   METRIC_WEIGHT,
   ensureRegistrySeeded,
@@ -248,6 +249,10 @@ export default function WeightEntryScreen() {
         subtitle={t('entry.weight.helper')}
         onBack={guardedBack}
       />
+
+      {/* Whose reading this is — the active profile is a device-global pointer a carer can
+          have switched. No-ops on a single-profile install. */}
+      <ActiveProfileTag />
 
       <View style={{ gap: spacing.md, paddingBottom: spacing.md }}>
         <EntryWhenBar when={when} />

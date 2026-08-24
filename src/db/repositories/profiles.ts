@@ -7,6 +7,7 @@
  */
 
 import type { Profile } from '../../types';
+import { planProfileArchive } from './profileArchive';
 import {
   type Bind,
   type Tx,
@@ -205,6 +206,53 @@ export async function updateProfile(
 
 export async function deleteProfile(id: string, tx?: Tx): Promise<void> {
   await softDeleteRecord('profile', id, tx);
+}
+
+/** Rename a patient. Trimmed and blank-checked by `updateProfile`. */
+export async function renameProfile(id: string, displayName: string, tx?: Tx): Promise<void> {
+  await updateProfile(id, { displayName }, tx);
+}
+
+/**
+ * Archive a patient — a SOFT delete, because the row holds a health record that must survive.
+ *
+ * It is not `deleteProfile` with a nicer name: it refuses to archive the last live patient
+ * (which would strand the app on no profile) and, when the archived profile was the default,
+ * promotes the oldest remaining one so exactly one default always survives. The decision is
+ * in `planProfileArchive` (pure, tested); this function is the transaction around it.
+ *
+ * ALL of it in ONE transaction: the soft delete and the default promotion cannot be
+ * interrupted between, or a crash leaves a device with zero defaults. Archiving an unknown or
+ * already-archived id is a no-op.
+ *
+ * The active-profile pointer (`app_meta`, repositories/settings.ts) is NOT touched here — it
+ * is a device-local view selector, and its resolver falls back to the default profile, which
+ * the promotion above has just guaranteed exists.
+ */
+export async function archiveProfile(id: string, tx?: Tx): Promise<void> {
+  await inTransaction(async (t) => {
+    const target = await queryFirst<{ is_default: number }>(
+      `SELECT is_default FROM profile WHERE id = ? AND deleted_at_epoch IS NULL;`,
+      [id],
+      t,
+    );
+    const liveOthers = await queryAll<{ id: string }>(
+      `SELECT id FROM profile
+         WHERE id <> ? AND deleted_at_epoch IS NULL
+         ORDER BY created_at_epoch ASC;`,
+      [id],
+      t,
+    );
+
+    const plan = planProfileArchive(
+      target ? { isDefault: intToBool(target.is_default) } : null,
+      liveOthers.map((row) => row.id),
+    );
+    if (!plan.archive) return;
+
+    await softDeleteRecord('profile', id, t);
+    if (plan.promoteToDefaultId) await setDefaultProfile(plan.promoteToDefaultId, t);
+  }, tx);
 }
 
 /**

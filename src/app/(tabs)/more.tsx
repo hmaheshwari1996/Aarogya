@@ -58,6 +58,11 @@ const STRINGS: LocalStrings = {
    * one feature must not look like two.
    */
   'more.documents': { en: 'Briefcase', hi: 'काग़ज़ों का बस्ता' },
+  'more.symptoms': { en: 'How I Felt', hi: 'मैंने कैसा महसूस किया' },
+  'more.symptomsSub': {
+    en: 'Everything you recorded feeling — remove a wrong entry',
+    hi: 'आपने जो महसूस करना दर्ज किया — ग़लत बात हटाइए',
+  },
   'more.documentsSub': {
     en: 'Discharge summaries, insurance papers, health cards — kept together',
     hi: 'डिस्चार्ज सारांश, बीमा के काग़ज़, हेल्थ कार्ड — सब एक साथ',
@@ -71,6 +76,11 @@ const STRINGS: LocalStrings = {
   },
   'more.viewers': { en: 'Family who can see this', hi: 'परिवार जो यह देख सकता है' },
   'more.viewersSub': { en: 'You allow each person yourself', hi: 'हर व्यक्ति को आप ख़ुद इजाज़त देती हैं' },
+  'more.patients': { en: 'Patients', hi: 'मरीज़' },
+  'more.patientsSub': {
+    en: 'Add, switch, rename or archive a patient',
+    hi: 'मरीज़ जोड़ें, बदलें, नाम बदलें या संग्रह करें',
+  },
   'more.settings': { en: 'Settings', hi: 'सेटिंग' },
   'more.settingsSub': { en: 'Bigger text, language, reminders', hi: 'बड़ा अक्षर, भाषा, याद दिलाना' },
   'more.about': { en: 'About Aarogya', hi: 'आरोग्य के बारे में' },
@@ -117,6 +127,12 @@ const SECTIONS: readonly MoreSection[] = [
         subtitleKey: 'more.documentsSub',
         href: '/briefcase',
       },
+      {
+        key: 'symptoms',
+        titleKey: 'more.symptoms',
+        subtitleKey: 'more.symptomsSub',
+        href: '/symptoms',
+      },
     ],
   },
   {
@@ -147,6 +163,12 @@ const SECTIONS: readonly MoreSection[] = [
     key: 'phone',
     titleKey: 'more.sectionPhone',
     items: [
+      {
+        key: 'patients',
+        titleKey: 'more.patients',
+        subtitleKey: 'more.patientsSub',
+        href: '/profiles',
+      },
       {
         key: 'settings',
         titleKey: 'more.settings',

@@ -117,6 +117,7 @@ import {
   TextField,
   useToast,
 } from '@/components/ui';
+import { ActiveProfileTag } from '@/app/profiles/_lib';
 import { useDateFormat } from '@/i18n/useDateFormat';
 import { ALL_DAYS, toLocalDate } from '@/lib/datetime';
 import { getCurrentVersion } from '@/db/repositories/medicines';
@@ -880,6 +881,10 @@ export default function ScheduleScreen() {
         subtitle={t('schedule.forMedicine', { name: state.data.medicine.nameAsWritten })}
         onBack={() => router.back()}
       />
+
+      {/* Whose schedule this is — the active profile is a device-global pointer a carer can
+          have switched. No-ops on a single-profile install. */}
+      <ActiveProfileTag />
 
       <View style={{ gap: spacing.lg }}>
         {isChange ? (

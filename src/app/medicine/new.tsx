@@ -36,6 +36,7 @@ import {
   useConfirm,
   useToast,
 } from '@/components/ui';
+import { ActiveProfileTag } from '@/app/profiles/_lib';
 import { createMedicine } from '@/db/repositories/medicines';
 import { spacing } from '@/theme';
 import type { Criticality, Medicine } from '@/types';
@@ -237,6 +238,10 @@ export default function NewMedicineScreen() {
       }
     >
       <ScreenHeader title={t('new.title')} subtitle={t('new.subtitle')} onBack={handleBack} />
+
+      {/* Whose medicine this is — the active profile is a device-global pointer a carer can
+          have switched. No-ops on a single-profile install. */}
+      <ActiveProfileTag />
 
       <View style={{ gap: spacing.lg }}>
         {prescriptionId ? (

@@ -70,7 +70,7 @@ internal object Scheduler {
     // they already recorded. Pruned as it is loaded, so it cannot grow forever.
     val resolved = ResolvedStore.loadPruned(ctx, nowMillis)
 
-    val fresh = Materializer.expand(horizon.rules, nowMillis)
+    val fresh = Materializer.expand(horizon.rules, nowMillis, horizon.exceptions)
       .filterNot { resolved.containsKey(it.occId) }
 
     // Snoozes are NOT derivable from the rules — they exist only because a human tapped

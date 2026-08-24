@@ -81,6 +81,7 @@ import {
   useConfirm,
   useToast,
 } from '@/components/ui';
+import { ActiveProfileTag } from '@/app/profiles/_lib';
 import {
   ensureRegistrySeeded,
   resolveProfileId,
@@ -361,6 +362,9 @@ export default function SymptomEntryScreen() {
       }
     >
       <ScreenHeader title={t('entry.symptom.title')} onBack={guardedBack} />
+      {/* Whose record this is — the active profile is a device-global pointer a carer can
+          have switched. No-ops on a single-profile install. */}
+      <ActiveProfileTag />
       <EntryWhenBar when={when} />
 
       <Text variant="label" style={{ paddingTop: spacing.lg, paddingBottom: spacing.md }}>

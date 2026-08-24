@@ -41,6 +41,8 @@ import {
   Button,
   Card,
   EmptyState,
+  Icon,
+  PressableScale,
   Screen,
   ScreenHeader,
   Skeleton,
@@ -48,12 +50,15 @@ import {
   useToast,
 } from '@/components/ui';
 import { useDateFormat } from '@/i18n/useDateFormat';
-import { spacing } from '@/theme';
+import { radii, spacing } from '@/theme';
+import { useTheme } from '@/theme/ThemeProvider';
 import type { DoseEvent, DoseOccurrence, DoseSchedule, Medicine, OccurrenceStatus } from '@/types';
 import { appendEvent, listEventsForOccurrence } from '@/db/repositories/doseEvents';
 import { getMedicine } from '@/db/repositories/medicines';
-import { getOccurrence, setStatus } from '@/db/repositories/occurrences';
+import { getOccurrence, setOccurrenceTimeOverride, setStatus } from '@/db/repositories/occurrences';
+import { listProfiles } from '@/db/repositories/profiles';
 import { getSchedule } from '@/db/repositories/schedules';
+import { splitWallClock, stepWallClock } from '@/features/slots/registry';
 import { deriveStatus, hasRecordedOutcome } from '@/features/dosing/deriveStatus';
 import { stopRinging } from '@/features/dosing/medAlarm';
 
@@ -67,6 +72,10 @@ const STRINGS: LocalStrings = {
   // she needs off this line is the number — "which of my times is this?" comes second.
   'dose.atSlot': { en: 'At {{time}}, {{slot}}', hi: '{{slot}}, {{time}} बजे' },
   'dose.stripPhoto': { en: 'Photo of the {{name}} strip', hi: '{{name}} के पत्ते की फोटो' },
+  // Whose dose this is. Reminders ring for EVERY profile on the device (R1), and two people
+  // can share a drug (both on a TB regimen), so a dose opened from a notification must name
+  // its patient — shown only when the phone actually holds more than one profile.
+  'dose.forPatient': { en: 'For {{name}}', hi: '{{name}} के लिए' },
   'dose.notTakingThis': { en: 'I am not taking this one', hi: 'यह खुराक मैं नहीं ले रही' },
   'dose.takenToast': { en: 'Written down at {{time}}', hi: '{{time}} बजे दर्ज कर लिया' },
   'dose.snoozedToast': {
@@ -97,7 +106,42 @@ const STRINGS: LocalStrings = {
     en: 'Could not write this down. Please try once more.',
     hi: 'यह दर्ज नहीं हो पाया। एक बार फिर कोशिश करें।',
   },
+
+  // ── Per-day time override (item 1). Everything here says "just today" out loud: moving
+  //    one dose must never read as changing the medicine's schedule, or she stops trusting
+  //    that her usual times are safe to leave alone. ──
+  'dose.onlyToday': { en: 'Only Today', hi: 'सिर्फ़ आज' },
+  'dose.changeTimeToday': { en: 'Change Time For Today', hi: 'आज के लिए समय बदलें' },
+  'dose.changeAgain': { en: 'Change Again', hi: 'फिर से बदलें' },
+  'dose.changeTimeHelp': {
+    en: 'Moves only today’s dose. Your usual times stay the same.',
+    hi: 'सिर्फ़ आज की खुराक हटती है। आपके आम समय वैसे ही रहते हैं।',
+  },
+  'dose.usualTime': { en: 'Usual time {{time}}', hi: 'आम समय {{time}}' },
+  'dose.movedToday': { en: 'Moved to {{time}}, only today', hi: '{{time}} पर हटाई, सिर्फ़ आज' },
+  'dose.saveForToday': { en: 'Save For Today', hi: 'आज के लिए रखें' },
+  'dose.useUsualTime': { en: 'Use Usual Time', hi: 'आम समय पर लौटें' },
+  'dose.timeChangedToast': { en: 'Just for today — {{time}}', hi: 'सिर्फ़ आज के लिए — {{time}}' },
+  'dose.timeRestoredToast': {
+    en: 'Back to the usual {{time}}',
+    hi: 'वापस आम समय {{time}} पर',
+  },
+  'dose.changeTimeFailed': {
+    en: 'Could not change the time. Please try once more.',
+    hi: 'समय नहीं बदल पाया। एक बार फिर कोशिश करें।',
+  },
+  // Stepper controls — 24-hour, like the schedule editor, for the same reason: an AM/PM
+  // misread on a dosing screen is a dose taken twelve hours off.
+  'dose.hour': { en: 'Hour', hi: 'घंटा' },
+  'dose.minute': { en: 'Minute', hi: 'मिनट' },
+  'dose.hourUp': { en: 'Later by an hour', hi: 'एक घंटा आगे' },
+  'dose.hourDown': { en: 'Earlier by an hour', hi: 'एक घंटा पीछे' },
+  'dose.minuteUp': { en: 'Later by five minutes', hi: 'पाँच मिनट आगे' },
+  'dose.minuteDown': { en: 'Earlier by five minutes', hi: 'पाँच मिनट पीछे' },
 };
+
+/** Minutes a single stepper tap moves. Matches the schedule editor's `SLOT_MINUTE_STEP`. */
+const MINUTE_STEP = 5;
 
 /** Ten minutes. Matches `reminders.snooze` — "Remind me in 10 minutes". */
 const SNOOZE_MINUTES = 10;
@@ -113,6 +157,10 @@ type DoseView = {
   answered: boolean;
   /** The event that answered it, when one exists. */
   outcome: DoseEvent | null;
+  /** This occurrence's OWN patient name — null on a single-profile phone, where naming a
+      patient on every dose is noise. Not the active profile: a notification can open a dose
+      for grandmother while mother is the viewed profile. */
+  patientName: string | null;
 };
 
 export default function DoseOccurrenceScreen() {
@@ -125,6 +173,12 @@ export default function DoseOccurrenceScreen() {
 
   const [saving, setSaving] = useState<'taken' | 'snoozed' | 'skipped' | null>(null);
   const [changing, setChanging] = useState(false);
+
+  // Per-day override editor. `draftTime` is 'HH:MM' held while the steppers move; it never
+  // touches the database until Save, so backing out costs nothing.
+  const [editingTime, setEditingTime] = useState(false);
+  const [draftTime, setDraftTime] = useState('08:00');
+  const [savingTime, setSavingTime] = useState(false);
 
   const state = useAsync<DoseView | null>(async () => {
     if (!occId) return null;
@@ -143,6 +197,14 @@ export default function DoseOccurrenceScreen() {
     const defs = await resolveSlots(occurrence.profileId);
     const slot = slotForRow(defs, occurrence.timeLocal, schedule?.slotKey ?? null);
 
+    // Name the patient only when more than one lives on the phone. `listProfiles()` already
+    // excludes archived (archive is a soft delete), so this matches ActiveProfileTag's gate.
+    const profiles = await listProfiles();
+    const patientName =
+      profiles.length > 1
+        ? (profiles.find((p) => p.id === occurrence.profileId)?.displayName ?? null)
+        : null;
+
     const outcome =
       [...events]
         .reverse()
@@ -158,8 +220,13 @@ export default function DoseOccurrenceScreen() {
       status,
       answered: hasRecordedOutcome(events) || status === 'cancelled',
       outcome,
+      patientName,
     };
   }, [occId]);
+
+  // `refresh` is stable (useAsync memoises it), so lifting it out here keeps the override
+  // callbacks' dep arrays honest without depending on the whole changing `state` object.
+  const refresh = state.refresh;
 
   const leave = useCallback(() => {
     // Opened from a notification there is no back stack, so falling through to the boot
@@ -224,6 +291,58 @@ export default function DoseOccurrenceScreen() {
     [formatTime, leave, t, toast],
   );
 
+  const openTimeEditor = useCallback((seed: string) => {
+    setDraftTime(seed);
+    setEditingTime(true);
+  }, []);
+
+  const saveOverride = useCallback(async () => {
+    if (!occId) return;
+    setSavingTime(true);
+    try {
+      // The occurrence keeps its slot-time id and `time_local`; only `override_time_local`
+      // and the re-derived epoch move. reconcile honours it (see override.ts / R2), so the
+      // moved dose survives the next foreground instead of snapping back to its usual time.
+      await setOccurrenceTimeOverride(occId, draftTime);
+      setEditingTime(false);
+      // Moving the dose to later IS a deferral, so silence a ring in progress the same way
+      // "Not now" does. LAST and never thrown into the failure path — the record of the move
+      // matters, a speaker that rings on for another minute does not. No event is written, so
+      // the dose stays pending, now at its new time.
+      stopRinging();
+      toast.show({
+        message: t('dose.timeChangedToast', { time: formatTime(draftTime) }),
+        variant: 'success',
+      });
+      refresh();
+    } catch {
+      toast.show({ message: t('dose.changeTimeFailed'), variant: 'error' });
+    } finally {
+      setSavingTime(false);
+    }
+  }, [occId, draftTime, formatTime, t, toast, refresh]);
+
+  const restoreUsualTime = useCallback(
+    async (usualTime: string) => {
+      if (!occId) return;
+      setSavingTime(true);
+      try {
+        await setOccurrenceTimeOverride(occId, null);
+        setEditingTime(false);
+        toast.show({
+          message: t('dose.timeRestoredToast', { time: formatTime(usualTime) }),
+          variant: 'info',
+        });
+        refresh();
+      } catch {
+        toast.show({ message: t('dose.changeTimeFailed'), variant: 'error' });
+      } finally {
+        setSavingTime(false);
+      }
+    },
+    [occId, formatTime, t, toast, refresh],
+  );
+
   if (state.loading) {
     return (
       <Screen>
@@ -265,6 +384,17 @@ export default function DoseOccurrenceScreen() {
   const answeredTaken = view.outcome?.event === 'taken' || view.outcome?.event === 'prn_taken';
   const showActions = !withdrawn && (!view.answered || changing);
 
+  // Per-day override. `timeLocal` is always the schedule's slot time (part of the occurrence
+  // id); `overrideTimeLocal`, when set, is where this ONE dose was moved to for today only.
+  // Every time shown on this screen is the EFFECTIVE one, so what she reads is where it will
+  // actually ring — the slot time survives as "usual time" beneath it, never lost.
+  const slotTime = view.occurrence.timeLocal;
+  const overrideTime = view.occurrence.overrideTimeLocal;
+  const effectiveTime = overrideTime ?? slotTime;
+  // Offer the control only while the dose is still open. Moving an answered or withdrawn dose
+  // has nothing to move, and `setOccurrenceTimeOverride` leaves that judgement to the screen.
+  const canAdjustTime = !withdrawn && !view.answered;
+
   const identity = (
     <Card>
       <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing.lg }}>
@@ -280,21 +410,39 @@ export default function DoseOccurrenceScreen() {
               {medicine.strength}
             </Text>
           ) : null}
+          {/* Whose dose — only on a multi-profile phone. The word "For" carries the meaning,
+              so this is not a colour-only signal. */}
+          {view.patientName ? (
+            <Text variant="title" tone="primary" weight="600">
+              {t('dose.forPatient', { name: view.patientName })}
+            </Text>
+          ) : null}
         </View>
       </View>
 
       <View style={{ gap: spacing.sm, paddingTop: spacing.lg }}>
         {quantity ? <Text variant="title">{quantity}</Text> : null}
         {/* `slotLabel`, never `t(slotI18nKey(...))` — a slot she invented herself has no
-            bundle key and would print its `custom:` hex back at her. */}
-        <Text variant="title">
-          {view.slot
-            ? t('dose.atSlot', {
-                time: formatTime(view.occurrence.timeLocal),
-                slot: slotLabel(view.slot, t),
-              })
-            : t('dose.at', { time: formatTime(view.occurrence.timeLocal) })}
-        </Text>
+            bundle key and would print its `custom:` hex back at her. The time is the
+            EFFECTIVE one: an overridden dose reads at the time it will actually ring. */}
+        <View style={{ flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap', gap: spacing.sm }}>
+          <Text variant="title">
+            {view.slot
+              ? t('dose.atSlot', {
+                  time: formatTime(effectiveTime),
+                  slot: slotLabel(view.slot, t),
+                })
+              : t('dose.at', { time: formatTime(effectiveTime) })}
+          </Text>
+          {overrideTime ? <OnlyTodayBadge label={t('dose.onlyToday')} /> : null}
+        </View>
+        {/* The usual time is kept visible whenever it has been overridden, so "only today"
+            is not a claim she has to take on trust — the schedule she set is right there. */}
+        {overrideTime ? (
+          <Text variant="label" tone="muted">
+            {t('dose.usualTime', { time: formatTime(slotTime) })}
+          </Text>
+        ) : null}
         {foodKey ? (
           <Text variant="label" tone="muted">
             {t(foodKey)}
@@ -344,6 +492,88 @@ export default function DoseOccurrenceScreen() {
       <ScreenHeader title={t('dose.title')} onBack={router.canGoBack() ? leave : undefined} />
 
       {identity}
+
+      {/* ── PER-DAY TIME OVERRIDE (item 1). Below the identity, above the answers: it is a
+          planning action ("today, at ten") and must never sit where the thumb aims for the
+          two answers. Every state says "today" out loud so it can never be mistaken for
+          editing the schedule. ── */}
+      {canAdjustTime ? (
+        <Card style={{ marginTop: spacing.lg, gap: spacing.md }}>
+          {editingTime ? (
+            <>
+              <Text variant="label">{t('dose.changeTimeToday')}</Text>
+              <View style={{ flexDirection: 'row', gap: spacing.md }}>
+                <TimeStepper
+                  label={t('dose.hour')}
+                  value={pad2(splitWallClock(draftTime).hour)}
+                  onDecrease={() => setDraftTime((c) => stepWallClock(c, -60))}
+                  onIncrease={() => setDraftTime((c) => stepWallClock(c, 60))}
+                  decreaseLabel={t('dose.hourDown')}
+                  increaseLabel={t('dose.hourUp')}
+                />
+                <TimeStepper
+                  label={t('dose.minute')}
+                  value={pad2(splitWallClock(draftTime).minute)}
+                  onDecrease={() => setDraftTime((c) => stepWallClock(c, -MINUTE_STEP))}
+                  onIncrease={() => setDraftTime((c) => stepWallClock(c, MINUTE_STEP))}
+                  decreaseLabel={t('dose.minuteDown')}
+                  increaseLabel={t('dose.minuteUp')}
+                />
+              </View>
+              <Text variant="body" tone="muted">
+                {t('dose.changeTimeHelp')}
+              </Text>
+              <Button
+                title={t('dose.saveForToday')}
+                onPress={() => void saveOverride()}
+                variant="primary"
+                size="lg"
+                fullWidth
+                loading={savingTime}
+              />
+              <Button
+                title={t('common.cancel')}
+                onPress={() => setEditingTime(false)}
+                variant="ghost"
+                size="md"
+                disabled={savingTime}
+              />
+            </>
+          ) : overrideTime ? (
+            <>
+              <Text variant="label">{t('dose.movedToday', { time: formatTime(overrideTime) })}</Text>
+              <Button
+                title={t('dose.changeAgain')}
+                onPress={() => openTimeEditor(effectiveTime)}
+                variant="secondary"
+                size="md"
+                disabled={savingTime}
+              />
+              {/* The undo. Clearing the override rings this dose at its usual time again and
+                  leaves the schedule exactly as it was — nothing about tomorrow changes. */}
+              <Button
+                title={t('dose.useUsualTime')}
+                onPress={() => void restoreUsualTime(slotTime)}
+                variant="ghost"
+                size="md"
+                loading={savingTime}
+              />
+            </>
+          ) : (
+            <>
+              <Button
+                title={t('dose.changeTimeToday')}
+                onPress={() => openTimeEditor(effectiveTime)}
+                variant="secondary"
+                size="md"
+              />
+              <Text variant="body" tone="muted">
+                {t('dose.changeTimeHelp')}
+              </Text>
+            </>
+          )}
+        </Card>
+      ) : null}
 
       {withdrawn ? (
         <Card variant="sunken" style={{ marginTop: spacing.lg }}>
@@ -399,6 +629,110 @@ export default function DoseOccurrenceScreen() {
         </View>
       ) : null}
     </Screen>
+  );
+}
+
+/** Two-digit for a stepper cell. The clock reads 24-hour; `formatTime` is only for display. */
+function pad2(value: number): string {
+  return String(value).padStart(2, '0');
+}
+
+/**
+ * The "Only Today" mark next to an overridden time.
+ *
+ * A WORD plus an icon, never colour alone — the app's rule for every state marker. On a
+ * monochrome OPD print and for the ~8% with red/green deficiency the pill still reads.
+ */
+function OnlyTodayBadge({ label }: { label: string }) {
+  const { colors } = useTheme();
+  return (
+    <View
+      accessibilityRole="text"
+      style={{
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: spacing.xs,
+        paddingHorizontal: spacing.sm,
+        paddingVertical: spacing.xs,
+        borderRadius: radii.pill,
+        borderWidth: 2,
+        borderColor: colors.borderStrong,
+        backgroundColor: colors.bgSunken,
+      }}
+    >
+      <Icon name="clock" size={16} color={colors.text} />
+      <Text variant="caption">{label}</Text>
+    </View>
+  );
+}
+
+/**
+ * One hour or minute stepper — a 24-hour cell with a minus and a plus.
+ *
+ * Copied in spirit from `medicine/schedule.tsx`'s Stepper (not exported) for the same reason
+ * it exists there: a native time picker renders 12-hour with AM/PM on several OEM skins, and
+ * an AM/PM misread on a dosing screen is a dose taken twelve hours off. Steps come from
+ * `stepWallClock`, so 23:55 + 5 min wraps to 00:00 rather than stranding the last five
+ * minutes of the day.
+ */
+function TimeStepper({
+  label,
+  value,
+  onDecrease,
+  onIncrease,
+  decreaseLabel,
+  increaseLabel,
+}: {
+  label: string;
+  value: string;
+  onDecrease: () => void;
+  onIncrease: () => void;
+  decreaseLabel: string;
+  increaseLabel: string;
+}) {
+  const { colors } = useTheme();
+  const key = (icon: 'minus' | 'plus', onPress: () => void, accessibilityLabel: string) => (
+    <PressableScale
+      onPress={onPress}
+      accessibilityRole="button"
+      accessibilityLabel={accessibilityLabel}
+      style={{
+        width: spacing.touchTarget,
+        height: spacing.touchTarget,
+        alignItems: 'center',
+        justifyContent: 'center',
+        borderRadius: radii.md,
+        borderWidth: 2,
+        borderColor: colors.borderStrong,
+        backgroundColor: colors.bgElevated,
+      }}
+    >
+      <Icon name={icon} size={26} color={colors.text} />
+    </PressableScale>
+  );
+  return (
+    <View style={{ flex: 1, gap: spacing.sm }}>
+      <Text variant="caption" tone="muted" align="center">
+        {label}
+      </Text>
+      <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
+        {key('minus', onDecrease, decreaseLabel)}
+        {/* The value is its own labelled live region: the '<label>' caption is a separate
+            node, so a bare '08' reads without a unit, and stepping changed the number with
+            no spoken feedback. Naming it '<label> <value>' and announcing on change means
+            each +/- is heard — this is a dosing time, an off-by-hours entry matters. */}
+        <Text
+          variant="title"
+          align="center"
+          style={{ flex: 1 }}
+          accessibilityLiveRegion="polite"
+          accessibilityLabel={`${label} ${value}`}
+        >
+          {value}
+        </Text>
+        {key('plus', onIncrease, increaseLabel)}
+      </View>
+    </View>
   );
 }
 

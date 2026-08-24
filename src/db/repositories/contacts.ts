@@ -115,6 +115,12 @@ export type DocumentRecord = {
   sizeBytes: number | null;
   /** True only when the app copied this file in for this row. See the file header. */
   ownsFile: boolean;
+  /**
+   * Pinned to the top of the briefcase. A per-device VIEW preference — it does not travel
+   * (document does not sync; see v5), because which papers one person keeps to hand is not a
+   * fact about the health record.
+   */
+  isPinned: boolean;
   /** Powers "added on …" without a second query. */
   createdAtEpoch: number;
 };
@@ -187,12 +193,13 @@ type DocumentRow = {
   mime_type: string | null;
   size_bytes: number | null;
   owns_file: number;
+  is_pinned: number;
   created_at_epoch: number;
 };
 
 const CONTACT_COLUMNS = 'id, profile_id, label, role, phone, address, sort_order';
 const DOCUMENT_COLUMNS = `id, profile_id, kind, title, file_uri, original_file_name,
-     mime_type, size_bytes, owns_file, created_at_epoch`;
+     mime_type, size_bytes, owns_file, is_pinned, created_at_epoch`;
 
 function mapContact(row: ContactRow): Contact {
   return {
@@ -217,6 +224,7 @@ function mapDocument(row: DocumentRow): DocumentRecord {
     mimeType: row.mime_type,
     sizeBytes: row.size_bytes,
     ownsFile: intToBool(row.owns_file),
+    isPinned: intToBool(row.is_pinned),
     createdAtEpoch: row.created_at_epoch,
   };
 }
@@ -427,6 +435,14 @@ export async function updateDocument(
   if (patch.kind !== undefined) values['kind'] = patch.kind;
   if (Object.keys(values).length === 0) return;
   await updateRecord('document', id, values, tx);
+}
+
+/**
+ * Pin or unpin a document. Purely a briefcase-ordering preference; it never touches the file
+ * and, because `document` does not sync, it stays on this device (see the field comment).
+ */
+export async function setDocumentPinned(id: string, pinned: boolean, tx?: Tx): Promise<void> {
+  await updateRecord('document', id, { is_pinned: boolToInt(pinned) }, tx);
 }
 
 /**

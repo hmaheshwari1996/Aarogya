@@ -15,6 +15,7 @@
 
 import type { Criticality, DoseOccurrence, OccurrenceStatus } from '../../types';
 import { occurrenceId } from '../../lib/ids';
+import { wallClockToEpoch } from '../../lib/datetime';
 import { TIER_TO_CHANNEL } from '../../constants/channels';
 import {
   type Bind,
@@ -33,6 +34,7 @@ type OccurrenceRow = {
   dose_schedule_id: string;
   local_date: string;
   time_local: string;
+  override_time_local: string | null;
   scheduled_at_epoch: number;
   status: OccurrenceStatus;
   channel_id: string;
@@ -47,6 +49,7 @@ function mapOccurrence(row: OccurrenceRow): DoseOccurrence {
     doseScheduleId: row.dose_schedule_id,
     localDate: row.local_date,
     timeLocal: row.time_local,
+    overrideTimeLocal: row.override_time_local,
     scheduledAtEpoch: row.scheduled_at_epoch,
     status: row.status,
     channelId: row.channel_id,
@@ -55,8 +58,10 @@ function mapOccurrence(row: OccurrenceRow): DoseOccurrence {
 
 const SELECT_OCCURRENCE = `
   SELECT id, profile_id, medicine_id, thread_id, dose_schedule_id, local_date, time_local,
-         scheduled_at_epoch, status, channel_id
+         override_time_local, scheduled_at_epoch, status, channel_id
     FROM dose_occurrence`;
+
+const TIME_LOCAL = /^([01]\d|2[0-3]):[0-5]\d$/;
 
 /**
  * Criticality decides which notification channel a dose rings on.
@@ -231,4 +236,83 @@ export async function refreshOccurrence(
 /** Writes the derived status cache. Only `deriveStatus` should decide the value. */
 export async function setStatus(id: string, status: OccurrenceStatus, tx?: Tx): Promise<void> {
   await updateRecord('dose_occurrence', id, { status }, tx);
+}
+
+/**
+ * Move ONE occurrence to a different time for its day, or clear the override.
+ *
+ * "Take today's 08:00 dose at 10:00" — the schedule rule is untouched, so tomorrow's 08:00
+ * dose is unaffected. `overrideTimeLocal` is 'HH:MM' wall clock, or null to ring at the
+ * schedule's own slot time again.
+ *
+ * WHY THIS IS ONE ROW AND NEVER TWO. The occurrence keeps its id and its `time_local` (the
+ * slot time, which is part of that id); only `override_time_local` and the re-derived
+ * `scheduled_at_epoch` change. So there is exactly one occurrence for this dose before and
+ * after — the original does not stay behind and ring as well. That "no double dose" property
+ * is structural here, not a guard that a later edit could drop.
+ *
+ * `scheduled_at_epoch` is re-derived from the override (or the slot time on clear) in the
+ * same write, so the day card is correct immediately — but wall clock stays authoritative:
+ * reconcile recomputes this epoch every run, and MUST derive it from `override_time_local`
+ * when present, or the next foreground resets an overridden 10:00 back to the slot's 08:00.
+ *
+ * The native alarm layer is rule-based and cannot yet express a one-off per-date exception;
+ * until the Kotlin side reads a per-date exceptions channel, an override changes the in-app
+ * schedule and the reconcile but not the native ring time. See migration v7 and the build
+ * report. No status guard here: whether an already-answered dose may be moved is the
+ * screen's call, not the data layer's.
+ */
+export async function setOccurrenceTimeOverride(
+  id: string,
+  overrideTimeLocal: string | null,
+  tx?: Tx,
+): Promise<void> {
+  if (overrideTimeLocal !== null && !TIME_LOCAL.test(overrideTimeLocal)) {
+    throw new Error(`setOccurrenceTimeOverride: override must be 'HH:MM' 24-hour, got ${overrideTimeLocal}`);
+  }
+  const occurrence = await getOccurrence(id, tx);
+  if (!occurrence) throw new Error(`setOccurrenceTimeOverride: occurrence ${id} does not exist`);
+
+  await updateRecord(
+    'dose_occurrence',
+    id,
+    {
+      override_time_local: overrideTimeLocal,
+      scheduled_at_epoch: wallClockToEpoch(
+        occurrence.localDate,
+        overrideTimeLocal ?? occurrence.timeLocal,
+      ),
+    },
+    tx,
+  );
+}
+
+/**
+ * Per-date ring moves for the alarm horizon: occurrences on/after `fromDate` that carry a
+ * per-day time override. Drives `AlarmHorizon.exceptions`; the native layer shifts exactly
+ * these occurrences' ring times, never duplicating them.
+ */
+export async function listHorizonOverrides(
+  profileId: string,
+  fromDate: string,
+  tx?: Tx,
+): Promise<{ threadId: string; localDate: string; timeLocal: string; overrideTimeLocal: string }[]> {
+  const rows = await queryAll<{
+    thread_id: string;
+    local_date: string;
+    time_local: string;
+    override_time_local: string;
+  }>(
+    `SELECT thread_id, local_date, time_local, override_time_local
+       FROM dose_occurrence
+      WHERE profile_id = ? AND override_time_local IS NOT NULL AND local_date >= ?;`,
+    [profileId, fromDate],
+    tx,
+  );
+  return rows.map((r) => ({
+    threadId: r.thread_id,
+    localDate: r.local_date,
+    timeLocal: r.time_local,
+    overrideTimeLocal: r.override_time_local,
+  }));
 }

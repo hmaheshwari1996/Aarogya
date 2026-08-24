@@ -124,10 +124,20 @@ internal object Materializer {
   fun expand(
     rules: List<AlarmRule>,
     nowMillis: Long,
+    exceptions: List<AlarmException> = emptyList(),
     horizonDays: Int = DEFAULT_HORIZON_DAYS,
     zone: ZoneId = ZoneId.systemDefault()
   ): List<AlarmSpec> {
     val out = ArrayList<AlarmSpec>()
+    // Per-date ring moves, keyed exactly on the occurrence being moved. A miss (the norm)
+    // leaves fireTime at the rule time, so expansion is byte-identical to before this
+    // feature. A hit SHIFTS this one emission's trigger; it never adds a second spec, so a
+    // moved dose cannot double-ring. The occId keeps the ORIGINAL timeLocal, so the journal
+    // record still matches the occurrence a "taken" was recorded against.
+    val overrideByKey = HashMap<String, String>()
+    for (ex in exceptions) {
+      overrideByKey["${ex.threadId}|${ex.localDate}|${ex.timeLocal}"] = ex.overrideTimeLocal
+    }
     val today = java.time.Instant.ofEpochMilli(nowMillis).atZone(zone).toLocalDate()
     val lastDay = today.plusDays(horizonDays.toLong())
 
@@ -143,10 +153,14 @@ internal object Materializer {
       while (!day.isAfter(lastDay)) {
         if (stoppedOn != null && day.isAfter(stoppedOn)) break
         if (fires(rule, startedOn, day)) {
+          // A per-day override shifts ONLY this day's ring; the rule and every other day
+          // are untouched. `fireTime` falls back to the rule time on a miss.
+          val overrideTimeLocal = overrideByKey["${rule.threadId}|${day}|${rule.timeLocal}"]
+          val fireTime = overrideTimeLocal?.let { parseTime(it) } ?: time
           // atZone() resolves a DST gap by moving forward to the first valid instant and
           // a DST overlap by taking the earlier offset. Both are the behaviour a person
           // expects from "my 02:30 tablet" on the two days a year it is ambiguous.
-          val triggerAt = day.atTime(time).atZone(zone).toInstant().toEpochMilli()
+          val triggerAt = day.atTime(fireTime).atZone(zone).toInstant().toEpochMilli()
           val base = AlarmSpec(
             occId = "${rule.threadId}:${day}:${rule.timeLocal}",
             variant = "base",

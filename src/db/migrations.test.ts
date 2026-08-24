@@ -1076,3 +1076,147 @@ test('the strip and the migration still agree that a path does not travel', () =
     );
   }
 });
+
+// ── v7 — per-day override, multiple profiles, briefcase pin, sync foundation ──
+//
+// v7 is pure schema: it adds columns and one empty reserved table, and touches neither
+// `sync_outbox` nor the lamport counter — which is why every v5/v6 assertion above still
+// holds after it runs. The tests here prove the four shapes, and the ONE behavioural
+// invariant the override rests on: a moved dose is the same row, never a second one.
+
+function columns(db: DatabaseSync, table: string): Set<string> {
+  return new Set(all(db, `PRAGMA table_info(${table});`).map((row) => row['name'] as string));
+}
+
+test('v7: a fresh install has every new column and the reserved, empty member table', async () => {
+  const db = await freshInstall();
+
+  assert.ok(columns(db, 'dose_occurrence').has('override_time_local'), 'override column missing');
+  assert.ok(columns(db, 'document').has('is_pinned'), 'is_pinned column missing');
+  const profileCols = columns(db, 'profile');
+  assert.ok(profileCols.has('share_id') && profileCols.has('owner_device_id'), 'profile sync columns missing');
+
+  const tables = new Set(
+    all(db, `SELECT name FROM sqlite_master WHERE type='table';`).map((row) => row['name'] as string),
+  );
+  assert.ok(tables.has('profile_member'), 'the reserved member table must exist');
+  assert.equal((one(db, `SELECT COUNT(*) AS n FROM profile_member;`) as { n: number }).n, 0, 'it must ship EMPTY');
+  // Its shape is the reserved one from the design doc §5 — checked so a future edit that drops
+  // a column fails here rather than when the sharing build reaches for it.
+  const memberCols = columns(db, 'profile_member');
+  for (const col of ['share_id', 'device_id', 'public_key', 'device_label', 'role', 'added_at_epoch', 'removed_at_epoch']) {
+    assert.ok(memberCols.has(col), `profile_member.${col} is missing`);
+  }
+  db.close();
+});
+
+test('v7: an in-use v3 database upgrades to v7 with the new columns and clean integrity', () => {
+  const db = legacyInstall();
+  applyMigrations(db, LATEST_VERSION, 3);
+  assert.equal((one(db, 'PRAGMA user_version;') as { user_version: number }).user_version, 7);
+  assert.ok(columns(db, 'dose_occurrence').has('override_time_local'));
+  assert.ok(columns(db, 'document').has('is_pinned'));
+  assert.ok(columns(db, 'profile').has('share_id'));
+  assert.equal((one(db, 'PRAGMA integrity_check;') as { integrity_check: string }).integrity_check, 'ok');
+  assert.equal(all(db, 'PRAGMA foreign_key_check;').length, 0);
+  db.close();
+});
+
+test('v7: is_pinned defaults to 0 and refuses anything but 0 or 1', async () => {
+  const db = await freshInstall();
+  db.prepare(`INSERT INTO profile(id, display_name, created_at_epoch, updated_at_epoch) VALUES ('p1','Her',1,1);`).run();
+  db.prepare(
+    `INSERT INTO document(id, profile_id, kind, title, file_uri, created_at_epoch, updated_at_epoch)
+     VALUES ('d1','p1','discharge_summary','Hospital paper','file:///b/a.pdf',1,1);`,
+  ).run();
+  assert.equal(one(db, `SELECT is_pinned FROM document WHERE id='d1';`)?.['is_pinned'], 0);
+  assert.throws(() => db.prepare(`UPDATE document SET is_pinned = 2 WHERE id='d1';`).run(), /CHECK/);
+  db.close();
+});
+
+test('v7: share_id is unique among the ids that exist, and many profiles may sit at NULL', async () => {
+  const db = await freshInstall();
+  const insert = (id: string, shareId: string | null) =>
+    db
+      .prepare(
+        `INSERT INTO profile(id, display_name, share_id, created_at_epoch, updated_at_epoch)
+         VALUES (?, ?, ?, 1, 1);`,
+      )
+      .run(id, `P ${id}`, shareId);
+
+  insert('p1', null);
+  insert('p2', null);
+  insert('p3', 'SHARE-A'); // fine
+  // A second profile claiming the same share id is the collision the index exists to refuse.
+  assert.throws(() => insert('p4', 'SHARE-A'), /UNIQUE|constraint/i);
+  assert.equal((one(db, `SELECT COUNT(*) AS n FROM profile;`) as { n: number }).n, 3);
+  db.close();
+});
+
+test('v7: the profile table holds N rows and a soft delete simply hides one', async () => {
+  // Everything archiveProfile relies on at the schema level (the branching itself is proved
+  // in repositories/profileArchive.test.ts): N profiles coexist, and "archived" is a
+  // deleted_at_epoch that a live-only read filters out — no row is destroyed.
+  const db = await freshInstall();
+  for (const id of ['p1', 'p2', 'p3']) {
+    db.prepare(
+      `INSERT INTO profile(id, display_name, is_default, created_at_epoch, updated_at_epoch)
+       VALUES (?, ?, ?, 1, 1);`,
+    ).run(id, `Patient ${id}`, id === 'p1' ? 1 : 0);
+  }
+  db.prepare(`UPDATE profile SET deleted_at_epoch = 99 WHERE id = 'p2';`).run();
+
+  const live = all(db, `SELECT id FROM profile WHERE deleted_at_epoch IS NULL ORDER BY id;`).map(
+    (row) => row['id'],
+  );
+  assert.deepEqual(live, ['p1', 'p3'], 'the archived profile is hidden, the others remain');
+  assert.equal((one(db, `SELECT COUNT(*) AS n FROM profile;`) as { n: number }).n, 3, 'nothing is destroyed');
+  db.close();
+});
+
+test('v7: a per-day time override moves ONE occurrence and never mints a second dose', async () => {
+  // R2, at the data layer. The occurrence id is '<thread>:<date>:<time_local>' where
+  // time_local is the SLOT time, so the override rides on the existing 08:00 row: its id and
+  // time_local do not change, and no 10:00 occurrence is created. One dose, moved — not two.
+  const db = await freshInstall();
+  db.prepare(`INSERT INTO profile(id, display_name, created_at_epoch, updated_at_epoch) VALUES ('p1','Her',1,1);`).run();
+  db.prepare(
+    `INSERT INTO medicine(id, thread_id, version, profile_id, name_as_written, confirmed_by_user_at,
+                          created_at_epoch, updated_at_epoch)
+     VALUES ('m1','t1',1,'p1','Rifampicin 450', 100, 1, 1);`,
+  ).run();
+  db.prepare(
+    `INSERT INTO dose_schedule(id, medicine_id, thread_id, version, time_local, started_on,
+                               confirmed_by_user_at, created_at_epoch, updated_at_epoch)
+     VALUES ('sch1','m1','t1',1,'08:00','2026-08-24', 100, 1, 1);`,
+  ).run();
+  db.prepare(
+    `INSERT INTO dose_occurrence(id, profile_id, medicine_id, thread_id, dose_schedule_id,
+                                 local_date, time_local, scheduled_at_epoch, status, channel_id,
+                                 created_at_epoch, updated_at_epoch)
+     VALUES ('t1:2026-08-24:08:00','p1','m1','t1','sch1','2026-08-24','08:00', 800, 'pending',
+             'dose_standard_v1', 1, 1);`,
+  ).run();
+
+  const before = all(db, `SELECT id FROM dose_occurrence WHERE thread_id='t1' AND local_date='2026-08-24';`);
+  assert.equal(before.length, 1);
+
+  // What setOccurrenceTimeOverride writes: the column plus the re-derived epoch, in place.
+  db.prepare(
+    `UPDATE dose_occurrence SET override_time_local='10:00', scheduled_at_epoch = 1000
+      WHERE id='t1:2026-08-24:08:00';`,
+  ).run();
+
+  const after = all(db, `SELECT id, time_local, override_time_local FROM dose_occurrence
+                           WHERE thread_id='t1' AND local_date='2026-08-24';`);
+  assert.equal(after.length, 1, 'the override must not create a second occurrence');
+  assert.equal(after[0]?.['id'], 't1:2026-08-24:08:00', 'the id — and so the identity — is unchanged');
+  assert.equal(after[0]?.['time_local'], '08:00', 'the slot time stays; only the ring moves');
+  assert.equal(after[0]?.['override_time_local'], '10:00');
+  // And nothing rings at the old slot separately: there is exactly one row, carrying the override.
+  assert.equal(
+    (one(db, `SELECT COUNT(*) AS n FROM dose_occurrence WHERE thread_id='t1' AND local_date='2026-08-24' AND override_time_local IS NULL;`) as { n: number }).n,
+    0,
+  );
+  db.close();
+});

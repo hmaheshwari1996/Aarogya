@@ -1241,6 +1241,127 @@ const V6_PATHS_STOP_TRAVELLING = [
   `UPDATE app_meta SET value = CAST(CAST(value AS INTEGER) + 1 AS TEXT) WHERE key = 'lamport';`,
 ] as const;
 
+/**
+ * v7 — per-day dose-time override, multiple profiles, briefcase pin, and the schema the
+ * family-sharing build will need so it can ship without a second migration of `profile`.
+ *
+ * ADD-ONLY, one author, one transaction. Nothing here changes what the app does today: the
+ * two sharing columns and the reserved membership table sit empty and unread, the pin
+ * column defaults to "not pinned", and the override column defaults to NULL (= ring at the
+ * schedule's own time). Behaviour arrives only when the screens that read these land.
+ *
+ * ── A. PER-DAY DOSE-TIME OVERRIDE (`dose_occurrence.override_time_local`) ─────────────
+ *
+ * "Today take the 8 am dose at 10 am, and leave the 8 am rule alone." The rule is
+ * `dose_schedule` (append-only, wall clock '08:00'); the exception is ONE occurrence.
+ *
+ * It is a nullable column on the occurrence, NOT a new occurrence and NOT an edit to the
+ * schedule, and every word of that is load-bearing:
+ *
+ *   • A new occurrence at 10:00 would be a SECOND dose. The occurrence id is
+ *     '<thread>:<date>:<time_local>' where `time_local` is the SLOT time — so the override
+ *     rides on the existing '…:08:00' row, its id and its `time_local` unchanged. There is
+ *     exactly one occurrence for that dose, before and after. No double dose, by
+ *     construction rather than by a guard that can be forgotten.
+ *   • The occurrence's `scheduled_at_epoch` is recomputed from `override_time_local ?? time_local`
+ *     — wall clock resolved at each reconcile, never a stored future epoch (the whole
+ *     wall-clock design, see the header). `setOccurrenceTimeOverride` in
+ *     repositories/occurrences.ts writes the column AND re-derives the epoch in one write so
+ *     the day card is self-consistent before the next reconcile runs.
+ *   • Editing the schedule would move EVERY future 08:00 dose. This moves one date's.
+ *
+ * RECONCILE MUST HONOUR IT — and this is the one place a build agent can undo the feature
+ * without tripping a type. `reconcile.ts` recomputes an existing occurrence's epoch from the
+ * candidate's slot time and calls `refreshOccurrence` when they differ; left as-is it would
+ * reset an overridden 10:00 back to 08:00 on the very next foreground. The candidate's
+ * `scheduledAtEpoch` for an occurrence that carries an override must be derived from the
+ * override. Retirement is already safe: the overridden row keeps its '…:08:00' id, the
+ * calendar still produces that candidate, so Rule B never sees it as stale.
+ *
+ * THE ALARM-LAYER GAP, STATED HONESTLY (see the report handed to the build agents). The
+ * native horizon holds recurrence RULES that Kotlin expands forward on its own; a one-off
+ * "this date only, 08:00 → 10:00" is not expressible as a rule. So the override reaches the
+ * database, the reconcile and every in-app surface, but NOT the native alarm until Kotlin
+ * learns to read a per-date exception. Shipping the column + repo + reconcile now — and the
+ * Kotlin exceptions channel later — is deliberate: a half-wired alarm that rings at both
+ * 08:00 and 10:00 would be the double dose this whole design exists to prevent.
+ *
+ * ── B. MULTIPLE PROFILES ─────────────────────────────────────────────────────────────
+ *
+ * Nothing schema-wise: every profile-scoped table has carried `profile_id` since v1 (see the
+ * header note), and `profile` has never had a one-row constraint — it holds N rows today. The
+ * active-profile pointer is an `app_meta` key (`getActiveProfileId`/`setActiveProfileId` in
+ * repositories/settings.ts), device-local and unsynced, so it needs no migration. The active
+ * profile is a VIEW selector only; the alarm horizon is DEVICE-scoped and rings every local
+ * profile's medicines regardless of which one is on screen (see the report, R1).
+ *
+ * ── C. SYNC FOUNDATION (forward-compatible, no behaviour) ────────────────────────────
+ *
+ * Per docs/MULTI-DEVICE-SYNC-DESIGN.md §5 + LOCKED DECISIONS: a profile is the unit of
+ * sharing, so it needs a stable public id (`share_id`) and a record of which device owns the
+ * alarms (`owner_device_id`, the doc's "Owner"/"master"). Adding them now means the sharing
+ * build never has to migrate `profile` on a phone that already holds a health record.
+ *
+ *   • `share_id` is UNIQUE but nullable (null until shared, and most profiles stay null).
+ *     SQLite forbids a UNIQUE constraint on ALTER … ADD COLUMN, so it is a partial unique
+ *     index instead — which also states the intent: uniqueness applies to the ids that exist,
+ *     and any number of profiles may sit at NULL.
+ *   • `profile_member` is created EMPTY and stays empty this round. Its existence now is the
+ *     whole point — the reserved shape from §5 so membership has somewhere to land later. It
+ *     is local-only (`sync: false` in TABLES): membership is managed by the owner, never
+ *     merged. No foreign key to `profile(share_id)`: the target is nullable, the table is
+ *     empty, and an FK on a reserved table is friction with nothing to protect.
+ *
+ * ── D. BRIEFCASE PIN (`document.is_pinned`) ──────────────────────────────────────────
+ *
+ * A pinned section on top of the briefcase. Defaults to 0 and is CHECK (0,1), mirroring
+ * `owns_file` exactly — a row written by a caller that has never heard of pinning is simply
+ * unpinned, which is the safe and obvious default. Pinning is a per-device VIEW preference,
+ * so it does not travel (document stays `sync: false` regardless; see v5).
+ */
+const V7_PER_DAY_OVERRIDE = [
+  // The one occurrence's ring time, overriding the schedule's slot time for THIS date only.
+  // NULL = ring at `time_local`, the schedule's own time. 'HH:MM' wall clock, never an
+  // epoch — the occurrence's `scheduled_at_epoch` is re-derived from it at every reconcile,
+  // so a DST shift or a flight moves the overridden dose too instead of stranding it.
+  `ALTER TABLE dose_occurrence ADD COLUMN override_time_local TEXT;`,
+] as const;
+
+const V7_MULTI_PROFILE_SYNC_FOUNDATION = [
+  // The profile's stable public identity once it is shared; the rows it publishes ride under
+  // this. NULL until sharing is turned on for the profile, which is the normal state.
+  `ALTER TABLE profile ADD COLUMN share_id TEXT;`,
+  // The device that OWNS the alarms for this profile (the design's Owner/master). NULL means
+  // "this device, not yet shared". Reassignable when ownership transfers.
+  `ALTER TABLE profile ADD COLUMN owner_device_id TEXT;`,
+  // UNIQUE across the ids that EXIST — a partial index because (a) ALTER ADD COLUMN cannot
+  // carry a UNIQUE constraint, and (b) many profiles legitimately sit at NULL and must not
+  // collide there.
+  `CREATE UNIQUE INDEX idx_profile_share_id ON profile(share_id) WHERE share_id IS NOT NULL;`,
+
+  // Reserved and EMPTY this round. The membership shape from docs/MULTI-DEVICE-SYNC-DESIGN.md
+  // §5, created now so the sharing build needs no `profile` migration later. Local-only
+  // (TABLES: sync:false) — membership is managed by the owner, not merged between devices.
+  `CREATE TABLE profile_member (
+     share_id         TEXT NOT NULL,
+     device_id        TEXT NOT NULL,
+     public_key       TEXT,
+     device_label     TEXT,
+     role             TEXT,
+     added_at_epoch   INTEGER,
+     removed_at_epoch INTEGER,
+     PRIMARY KEY (share_id, device_id)
+   );`,
+] as const;
+
+const V7_BRIEFCASE_PIN = [
+  // 0 = not pinned (the default a caller that never thought about pinning gets), 1 = pinned
+  // to the top of the briefcase. CHECK mirrors `owns_file`; pinning is a per-device view
+  // preference and does not sync.
+  `ALTER TABLE document ADD COLUMN is_pinned INTEGER NOT NULL DEFAULT 0
+     CHECK (is_pinned IN (0,1));`,
+] as const;
+
 export const MIGRATIONS: readonly Migration[] = [
   {
     version: 1,
@@ -1304,6 +1425,15 @@ export const MIGRATIONS: readonly Migration[] = [
     version: 6,
     name: 'v6_local_paths_do_not_travel',
     statements: [...V6_PATHS_STOP_TRAVELLING],
+  },
+  {
+    version: 7,
+    name: 'v7_override_multiprofile_pin_sync_foundation',
+    statements: [
+      ...V7_PER_DAY_OVERRIDE,
+      ...V7_MULTI_PROFILE_SYNC_FOUNDATION,
+      ...V7_BRIEFCASE_PIN,
+    ],
   },
 ];
 

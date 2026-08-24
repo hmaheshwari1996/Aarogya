@@ -176,7 +176,15 @@ export type DoseOccurrence = {
   threadId: string;
   doseScheduleId: string;
   localDate: string;
+  /** The schedule's SLOT time and part of the occurrence id. Stable; the override moves the ring, not this. */
   timeLocal: string;
+  /**
+   * A per-day exception to `timeLocal` for THIS occurrence only — 'HH:MM' wall clock, or null
+   * to ring at the slot time. Set via `setOccurrenceTimeOverride`; `scheduled_at_epoch` is
+   * re-derived from `overrideTimeLocal ?? timeLocal`. It moves one occurrence and leaves the
+   * schedule (and every other day's dose) untouched — no second dose is ever created.
+   */
+  overrideTimeLocal: string | null;
   scheduledAtEpoch: number;
   /** DERIVED CACHE. Recomputed by deriveStatus(). Never the source of truth. */
   status: OccurrenceStatus;
@@ -219,11 +227,27 @@ export type AlarmRule = {
   escalateAfterMin: number[];
 };
 
+/**
+ * A one-off per-date time move for a single occurrence. The native layer SHIFTS the
+ * matching occurrence's ring to `overrideTimeLocal` on that date only — it never adds a
+ * second alarm, so there is no double dose (see Materializer.kt). `timeLocal` is the
+ * occurrence's ORIGINAL slot time, which is what the occurrence id is built from, so the
+ * identity is unchanged and a "taken" still attaches.
+ */
+export type AlarmException = {
+  threadId: string;
+  localDate: string;
+  timeLocal: string;
+  overrideTimeLocal: string;
+};
+
 export type AlarmHorizon = {
   schemaVersion: 1;
   writtenAtEpoch: number;
   profileId: string;
   rules: AlarmRule[];
+  /** Per-date ring moves. Empty is the norm; when empty the native expansion is unchanged. */
+  exceptions: AlarmException[];
 };
 
 /** One small file per event, written atomically by Kotlin, ingested and unlinked by JS. */

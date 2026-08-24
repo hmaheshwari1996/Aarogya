@@ -26,7 +26,7 @@
  * and the layout contradicts. FlatList still virtualises without it; it simply measures.
  */
 
-import React, { useCallback, useEffect, useMemo } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { FlatList, View } from 'react-native';
 import { router } from 'expo-router';
 
@@ -35,11 +35,13 @@ import { useDateFormat } from '@/i18n/useDateFormat';
 import {
   Banner,
   Button,
+  Chip,
   Divider,
   EmptyState,
   PressableScale,
   Screen,
   ScreenHeader,
+  SectionHeader,
   Skeleton,
   Text,
 } from '@/components/ui';
@@ -60,6 +62,7 @@ import {
   kindLabelKey,
   sweepPendingFileDeletes,
 } from './_lib';
+import { sortDocuments, type BriefcaseSort } from '@/features/briefcase/sort';
 
 /**
  * The kind and file-type labels come from `BRIEFCASE_SHARED_STRINGS` because they are
@@ -94,6 +97,18 @@ const STRINGS: LocalStrings = {
     hi: 'यहाँ डिस्चार्ज सारांश, बीमा के काग़ज़, हेल्थ कार्ड और पहचान के काग़ज़ रखे जा सकते हैं, ताकि डॉक्टर के पूछने पर सब एक जगह मिल जाएँ। काग़ज़ की फोटो लीजिए, या फ़ोन में रखी कोई फ़ाइल चुनिए।',
   },
   'briefcase.addAction': { en: 'Add a Paper', hi: 'काग़ज़ जोड़िए' },
+
+  // ── The two sections, and the order the lower one is shown in ────────────────
+  // Pinned rides at the top so the two or three papers she carries to every appointment
+  // are not scrolled for. The section only appears when something is pinned — an empty
+  // 'Pinned' heading over nothing is a promise the screen did not keep.
+  'briefcase.pinnedSection': { en: 'Pinned', hi: 'पिन किए हुए' },
+  'briefcase.allSection': { en: 'All Papers', hi: 'सभी काग़ज़' },
+  'briefcase.sortLabel': { en: 'Show in Order', hi: 'इस क्रम में दिखाइए' },
+  'briefcase.sortRecent': { en: 'Newest First', hi: 'नए पहले' },
+  'briefcase.sortName': { en: 'By Name', hi: 'नाम से' },
+  'briefcase.sortKind': { en: 'By Kind', hi: 'प्रकार से' },
+
   'briefcase.count': { en: '{{n}} kept here', hi: 'यहाँ {{n}} रखे हैं' },
   'briefcase.countOne': { en: '1 kept here', hi: 'यहाँ 1 रखा है' },
   'briefcase.addedOn': { en: 'Added {{date}}', hi: '{{date}} को जोड़ा' },
@@ -160,6 +175,13 @@ function DocumentRow({
   );
 }
 
+/** The three sort orders, in the order the chips are offered. */
+const SORT_OPTIONS: readonly { key: BriefcaseSort; labelKey: string }[] = [
+  { key: 'recent', labelKey: 'briefcase.sortRecent' },
+  { key: 'name', labelKey: 'briefcase.sortName' },
+  { key: 'kind', labelKey: 'briefcase.sortKind' },
+];
+
 export default function BriefcaseScreen() {
   const t = useT(STRINGS);
   const { formatEpochDate } = useDateFormat();
@@ -170,6 +192,11 @@ export default function BriefcaseScreen() {
     [profileId],
   );
   useReloadOnFocus(reload);
+
+  // The sort applies to the papers she is browsing; it is a view choice, kept in memory
+  // and not persisted — the default (newest first) is the right answer for someone who
+  // just added a discharge summary and reopened the screen to check it landed.
+  const [sort, setSort] = useState<BriefcaseSort>('recent');
 
   /**
    * Finish any unlink that was interrupted.
@@ -185,12 +212,29 @@ export default function BriefcaseScreen() {
 
   const documents = useMemo(() => data ?? [], [data]);
 
+  const kindLabelOf = useCallback((kind: string) => t(kindLabelKey(kind)), [t]);
+
+  // Two partitions of the same small set — pinned on top, everything else below — each in
+  // the chosen order. A pinned paper is NOT repeated in the lower section: it moved up, it
+  // did not clone. The lower section keeps the name 'All Papers' because when nothing is
+  // pinned it genuinely is all of them, and when something is it reads as "the rest".
+  const pinned = useMemo(
+    () => sortDocuments(documents.filter((d) => d.isPinned), sort, kindLabelOf),
+    [documents, sort, kindLabelOf],
+  );
+  const rest = useMemo(
+    () => sortDocuments(documents.filter((d) => !d.isPinned), sort, kindLabelOf),
+    [documents, sort, kindLabelOf],
+  );
+
   const openDocument = useCallback((id: string) => {
     router.push(`/briefcase/${id}`);
   }, []);
 
-  const renderItem = useCallback(
-    ({ item }: { item: DocumentRecord }) => (
+  // One row element, used both in the pinned block (inside the header) and as the list's
+  // renderItem, so the two sections can never drift apart in how a paper looks.
+  const documentRow = useCallback(
+    (item: DocumentRecord) => (
       <DocumentRow
         document={item}
         onPress={() => openDocument(item.id)}
@@ -204,6 +248,11 @@ export default function BriefcaseScreen() {
       />
     ),
     [formatEpochDate, openDocument, t],
+  );
+
+  const renderItem = useCallback(
+    ({ item }: { item: DocumentRecord }) => documentRow(item),
+    [documentRow],
   );
 
   /**
@@ -231,6 +280,50 @@ export default function BriefcaseScreen() {
         actionLabel={t('briefcase.warningAction')}
         onAction={() => router.push('/backup')}
       />
+
+      {/* ── Pinned ──────────────────────────────────────────────────────────────
+          Rendered inside the header rather than as its own FlatList so there is only ever
+          one scroller on the screen. It is not virtualised, which is fine and deliberate:
+          the whole point of pinning is that the set is a handful — the papers she reaches
+          for every visit — not a list that grows without bound. An empty pinned set draws
+          nothing at all: no heading, no gap. */}
+      {pinned.length > 0 ? (
+        <View>
+          <SectionHeader title={t('briefcase.pinnedSection')} />
+          {pinned.map((item, index) => (
+            <View key={item.id}>
+              {index > 0 ? <Divider /> : null}
+              {documentRow(item)}
+            </View>
+          ))}
+        </View>
+      ) : null}
+
+      {/* ── All papers, and the order to show them in ─────────────────────────────
+          The header and the sort control only appear when there is something below to
+          order. Chips, not a dropdown: every option stays on screen at a full 56dp target,
+          which is the same reason the rest of this app never hides a choice behind a tap
+          (see Chip.tsx). */}
+      {rest.length > 0 ? (
+        <View>
+          <SectionHeader
+            title={pinned.length > 0 ? t('briefcase.allSection') : t('briefcase.title')}
+          />
+          <Text variant="caption" tone="muted" style={{ paddingBottom: spacing.sm }}>
+            {t('briefcase.sortLabel')}
+          </Text>
+          <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: spacing.sm }}>
+            {SORT_OPTIONS.map((option) => (
+              <Chip
+                key={option.key}
+                label={t(option.labelKey)}
+                selected={sort === option.key}
+                onPress={() => setSort(option.key)}
+              />
+            ))}
+          </View>
+        </View>
+      ) : null}
     </View>
   );
 
@@ -254,11 +347,15 @@ export default function BriefcaseScreen() {
       />
 
       <FlatList
-        data={documents}
+        data={rest}
         keyExtractor={(item) => item.id}
         renderItem={renderItem}
         ItemSeparatorComponent={Divider}
         ListHeaderComponent={header}
+        // `data` is only the lower section, so an empty `data` is NOT an empty screen when
+        // papers are pinned — those are drawn in the header above. The real-empty state and
+        // the loading skeletons are therefore gated on the TOTAL, and the all-pinned case
+        // falls through to null: the pinned block is already the whole of what she has.
         ListEmptyComponent={
           loading ? (
             <View style={{ gap: spacing.md }}>
@@ -266,9 +363,9 @@ export default function BriefcaseScreen() {
               <Skeleton height={THUMB_SIZE + spacing.xl} />
               <Skeleton height={THUMB_SIZE + spacing.xl} />
             </View>
-          ) : (
+          ) : documents.length === 0 ? (
             <EmptyState title={t('briefcase.empty')} message={t('briefcase.emptyMessage')} />
-          )
+          ) : null
         }
         ListFooterComponent={
           documents.length > 0 ? (

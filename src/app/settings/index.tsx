@@ -80,7 +80,7 @@ import {
   updateProfile,
   type ConditionPack,
 } from '@/db/repositories/profiles';
-import { useI18n } from '@/i18n';
+import { endonymOf, useI18n } from '@/i18n';
 import { toLocalDate } from '@/lib/datetime';
 import { spacing } from '@/theme';
 import { useTheme } from '@/theme/ThemeProvider';
@@ -219,7 +219,7 @@ const STRINGS: LocalStrings = {
 export default function SettingsScreen() {
   const t = useT(STRINGS);
   const { isLargeText, setLargeText } = useTheme();
-  const { lang } = useI18n();
+  const { lang, languageCode } = useI18n();
   const toast = useToast();
   const confirm = useConfirm();
   const profileState = useProfileId();
@@ -363,9 +363,13 @@ export default function SettingsScreen() {
             onChange={setLargeText}
           />
           <Divider inset={ROW_DIVIDER_INSET} />
+          {/* The endonym of the FULL language (`languageCode`, not the reduced `lang`): a
+              Bengali user must read "বাংলা" here, not "English" — `lang` collapses every
+              optional language to its 'en' fallback and would mislabel the row. Its own script,
+              so it is legible to exactly the person who chose it. */}
           <ListRow
             title={t('settings.language')}
-            subtitle={lang === 'hi' ? t('settings.languageHindi') : t('settings.languageEnglish')}
+            subtitle={endonymOf(languageCode)}
             onPress={() => router.push('/settings/language')}
           />
         </Card>

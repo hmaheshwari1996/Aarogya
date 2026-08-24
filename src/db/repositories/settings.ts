@@ -22,6 +22,25 @@ import { getMetricDef } from './metrics';
 
 /** JSON: `Record<metricKey, InstrumentRange>`. */
 export const META_INSTRUMENT_RANGES = 'instrument_ranges';
+
+/**
+ * The profile currently being VIEWED on this device. Device-local and unsynced on purpose:
+ * "which patient is on screen" is a fact about this handset, not about the health record, and
+ * it must never travel — a family member viewing grandmother's profile must not flip what
+ * this phone shows.
+ *
+ * IT IS A VIEW SELECTOR, NEVER AN ALARM SELECTOR. Reminders ring for EVERY local profile
+ * regardless of this value; the alarm horizon is device-scoped, not view-scoped. Switching it
+ * changes only which rows the screens read.
+ */
+export const META_ACTIVE_PROFILE_ID = 'active_profile_id';
+
+/**
+ * The chosen UI language key ('en', 'hi', and any Indian language added later as drop-in
+ * translation data). Device-local: language is a preference of the person holding the phone.
+ * Null means "not chosen yet" — the first-run language picker keys off that.
+ */
+export const META_LANGUAGE_PREF = 'language_pref';
 // The developer toggle's key is NOT declared here. It is `META_DEVLOG_ENABLED` in
 // `src/features/devlog/store.ts`, next to the only function allowed to write it. See the
 // note further down this file for what happened when there were two of them.
@@ -179,12 +198,64 @@ export async function boundForQualifier(
 }
 
 async function writeRanges(ranges: InstrumentRangeMap, tx?: Tx): Promise<void> {
+  await writeMeta(META_INSTRUMENT_RANGES, JSON.stringify(ranges), tx);
+}
+
+// ── Device-local pointers (active profile, language) ─────────────────────────
+// Plain string values over `app_meta`, sharing the same untyped door as the ranges above.
+// Neither syncs: one names which patient is on screen, the other names the phone-holder's
+// language, and both are properties of this device rather than of the health record.
+
+async function readMeta(key: string, tx?: Tx): Promise<string | null> {
+  const row = await queryFirst<{ value: string | null }>(
+    `SELECT value FROM app_meta WHERE key = ?;`,
+    [key],
+    tx,
+  );
+  return row?.value ?? null;
+}
+
+async function writeMeta(key: string, value: string, tx?: Tx): Promise<void> {
   const db = tx ? tx.db : await getDb();
   await db.runAsync(
     `INSERT INTO app_meta(key, value) VALUES (?, ?)
        ON CONFLICT(key) DO UPDATE SET value = excluded.value;`,
-    [META_INSTRUMENT_RANGES, JSON.stringify(ranges)],
+    [key, value],
   );
+}
+
+/**
+ * The profile currently on screen, or null when none has been chosen.
+ *
+ * This is the raw pointer; it is NOT validated against the profile table here. The resolver
+ * (`resolveProfileId` in src/app/_shared/lib.tsx) must treat a null OR a now-archived pointer
+ * as "fall back to the default profile" — an archived profile's id can linger here, and
+ * `archiveProfile` deliberately does not reach in to clear it.
+ */
+export async function getActiveProfileId(tx?: Tx): Promise<string | null> {
+  return readMeta(META_ACTIVE_PROFILE_ID, tx);
+}
+
+export async function setActiveProfileId(profileId: string, tx?: Tx): Promise<void> {
+  const id = profileId.trim();
+  if (!id) throw new Error('setActiveProfileId: profileId is required');
+  await writeMeta(META_ACTIVE_PROFILE_ID, id, tx);
+}
+
+/** The chosen language key, or null when the picker has not been answered yet. */
+export async function getLanguagePref(tx?: Tx): Promise<string | null> {
+  return readMeta(META_LANGUAGE_PREF, tx);
+}
+
+/**
+ * Record the chosen language. Any non-empty key is accepted — the language set is drop-in
+ * translation DATA with an English fallback, never a compile-time union, so a language added
+ * later needs no code change here.
+ */
+export async function setLanguagePref(language: string, tx?: Tx): Promise<void> {
+  const lang = language.trim();
+  if (!lang) throw new Error('setLanguagePref: language is required');
+  await writeMeta(META_LANGUAGE_PREF, lang, tx);
 }
 
 // ── Developer mode — DELIBERATELY NOT HERE ───────────────────────────────────

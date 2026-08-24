@@ -26,7 +26,6 @@
  */
 
 import type {
-  AlarmHorizon,
   AlarmRule,
   Criticality,
   DoseOccurrence,
@@ -51,7 +50,8 @@ import {
 } from '../../db/repositories/occurrences';
 import { appendEvent, listEventsForOccurrences } from '../../db/repositories/doseEvents';
 import { deriveStatus, hasRecordedOutcome } from './deriveStatus';
-import { publishHorizon } from './medAlarm';
+import { effectiveScheduledEpoch } from './override';
+import { publishDeviceHorizon } from './deviceHorizon';
 
 /**
  * Two days back, fourteen forward.
@@ -105,7 +105,7 @@ export async function reconcile(profileId: string, now: number = Date.now()): Pr
   const fromDate = addDays(today, -RECONCILE_PAST_DAYS);
   const toDate = addDays(today, RECONCILE_FUTURE_DAYS);
 
-  const { result, horizon } = await inTransaction(async (tx) => {
+  const { result } = await inTransaction(async (tx) => {
     // ── 1. What is she actually on right now ────────────────────────────────
     const medicines = await listActiveMedicines(profileId, tx);
     const schedulesByThread = await getCurrentSchedulesForThreads(
@@ -141,15 +141,29 @@ export async function reconcile(profileId: string, now: number = Date.now()): Pr
       if (already) {
         // Wall clock is authoritative; the epoch is re-derived every time so a DST
         // change or a flight moves the alarm instead of stranding it an hour out.
+        //
+        // R2 — HONOUR A PER-DAY OVERRIDE. The candidate epoch is built from the SLOT time.
+        // If this occurrence carries `override_time_local` (she moved today's 08:00 dose to
+        // 10:00), the effective epoch is the OVERRIDE's, not the slot's. Without this, the
+        // comparison below sees a moved 10:00 occurrence differ from an 08:00 candidate and
+        // resets it to 08:00 — silently snapping the dose she moved back to its old time on
+        // the next foreground, which is exactly the "original still fires" half R2 forbids.
+        // The override rides the same slot-time occurrence id, so buildCandidates matched it
+        // here rather than minting a second row — there is one occurrence, and it stays moved.
+        const effectiveEpoch = effectiveScheduledEpoch(
+          already.localDate,
+          already.overrideTimeLocal,
+          candidate.scheduledAtEpoch,
+        );
         if (
-          already.scheduledAtEpoch !== candidate.scheduledAtEpoch ||
+          already.scheduledAtEpoch !== effectiveEpoch ||
           already.channelId !== candidate.channelId ||
           already.doseScheduleId !== candidate.doseScheduleId
         ) {
           await refreshOccurrence(
             id,
             {
-              scheduledAtEpoch: candidate.scheduledAtEpoch,
+              scheduledAtEpoch: effectiveEpoch,
               channelId: candidate.channelId,
               doseScheduleId: candidate.doseScheduleId,
             },
@@ -174,6 +188,8 @@ export async function reconcile(profileId: string, now: number = Date.now()): Pr
     // ── 6. Probes for the doses we just armed ───────────────────────────────
     const probesInserted = await insertDeliveryProbes(tx, created);
 
+    // This profile's own rule count, for the result only. The ARMED horizon is the
+    // device-wide UNION published below — see step 7 and deviceHorizon.ts (R1).
     const rules = buildAlarmRules(medicines, schedulesByThread);
 
     return {
@@ -188,12 +204,6 @@ export async function reconcile(profileId: string, now: number = Date.now()): Pr
         rules: rules.length,
         alarmsArmed: false,
       } satisfies ReconcileResult,
-      horizon: {
-        schemaVersion: 1,
-        writtenAtEpoch: now,
-        profileId,
-        rules,
-      } satisfies AlarmHorizon,
     };
   });
 
@@ -202,7 +212,13 @@ export async function reconcile(profileId: string, now: number = Date.now()): Pr
   // across a boundary we do not control. If this fails, the database is already
   // correct and the next reconcile re-publishes; the reverse ordering could leave
   // the write lock held by a call that never returns.
-  const alarmsArmed = await publishHorizon(horizon);
+  //
+  // R1: the horizon is the WHOLE DEVICE's, not this one profile's. Publishing a
+  // single-profile horizon here would overwrite the file and stop Kotlin expanding
+  // every OTHER profile's doses — a switched-away patient's TB alarm would go silent.
+  // `publishDeviceHorizon` unions buildAlarmRules over every non-archived profile, so a
+  // reconcile triggered by viewing one patient can never drop another's reminders.
+  const alarmsArmed = await publishDeviceHorizon(now);
   return { ...result, alarmsArmed };
 }
 

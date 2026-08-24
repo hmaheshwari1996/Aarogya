@@ -1,32 +1,27 @@
 /**
  * Language.
  *
- * Each option is written IN ITS OWN SCRIPT — "English" and "हिंदी" — never "Hindi" in
- * Latin letters. A user who cannot read the current language has to be able to find the
- * row that gets her out of it, and the only reliable landmark is the shape of her own
- * script.
+ * Every option is rendered in its OWN script by `LanguagePicker` — "English", "हिंदी",
+ * "বাংলা" — never a transliteration. A user who cannot read the current language has to be
+ * able to find the row that gets her out of it, and the only reliable landmark is the shape
+ * of her own script.
  *
- * The change applies immediately, with no Save button and no restart. There is exactly
- * one thing to do on this screen and doing it is the confirmation.
+ * The change applies immediately, with no Save button and no restart. There is exactly one
+ * thing to do on this screen and doing it is the confirmation.
+ *
+ * The set of languages lives in `src/i18n/languages.ts`; this screen renders whatever is
+ * there. en + hi are complete; the rest fall back to English for any key not yet translated,
+ * so a language added as a data file shows up here with no change to this file.
  */
 
 import React, { useCallback } from 'react';
-import { View } from 'react-native';
 import { router } from 'expo-router';
 
 import { useT, type LocalStrings } from '@/app/_shared/lib';
-import {
-  Card,
-  Icon,
-  PressableScale,
-  Screen,
-  ScreenHeader,
-  Text,
-  useToast,
-} from '@/components/ui';
-import { SUPPORTED_LANGUAGES, useI18n, type Language } from '@/i18n';
-import { radii, spacing } from '@/theme';
-import { useTheme } from '@/theme/ThemeProvider';
+import { Screen, ScreenHeader, useToast } from '@/components/ui';
+import { LanguagePicker } from '@/i18n/LanguagePicker';
+import { useI18n } from '@/i18n';
+import { setLanguagePref } from '@/db/repositories/settings';
 
 const STRINGS: LocalStrings = {
   'language.subtitle': {
@@ -36,23 +31,24 @@ const STRINGS: LocalStrings = {
   'language.changed': { en: 'Language changed', hi: 'भाषा बदल गई' },
 };
 
-const LABEL_KEYS: Record<Language, string> = {
-  en: 'settings.languageEnglish',
-  hi: 'settings.languageHindi',
-};
-
 export default function LanguageScreen() {
   const t = useT(STRINGS);
-  const { lang, setLang } = useI18n();
-  const { colors } = useTheme();
+  const { languageCode, setLang } = useI18n();
   const toast = useToast();
 
   const choose = useCallback(
-    (next: Language) => {
-      if (next !== lang) setLang(next);
+    (next: string) => {
+      // `setLang` flips the live UI and persists to AsyncStorage — the source boot reads
+      // BEFORE the database is open, so it must stay the authority. `setLanguagePref` mirrors
+      // the same choice into `app_meta` for any db-scoped reader; a mirror write that fails
+      // must not swallow the language change she just saw, so it is fire-and-forget.
+      if (next !== languageCode) {
+        setLang(next);
+        void setLanguagePref(next).catch(() => {});
+      }
       toast.show({ message: t('language.changed'), variant: 'success' });
     },
-    [lang, setLang, t, toast],
+    [languageCode, setLang, t, toast],
   );
 
   return (
@@ -62,54 +58,7 @@ export default function LanguageScreen() {
         subtitle={t('language.subtitle')}
         onBack={() => router.back()}
       />
-
-      <View style={{ gap: spacing.md }}>
-        {SUPPORTED_LANGUAGES.map((option) => {
-          const selected = option === lang;
-          const label = t(LABEL_KEYS[option]);
-          return (
-            <PressableScale
-              key={option}
-              onPress={() => choose(option)}
-              accessibilityRole="radio"
-              accessibilityLabel={label}
-              accessibilityState={{ checked: selected, selected }}
-              accessibilityValue={{ text: selected ? t('a11y.selected') : t('a11y.notSelected') }}
-            >
-              <Card style={selected ? { borderColor: colors.primary, borderWidth: 3 } : undefined}>
-                <View
-                  style={{
-                    flexDirection: 'row',
-                    alignItems: 'center',
-                    gap: spacing.md,
-                    minHeight: spacing.touchTargetLarge,
-                  }}
-                >
-                  {/* Selection is carried by a tick as well as the border, so it survives
-                      a bright screen, a cheap panel and colour deficiency alike. */}
-                  <View
-                    style={{
-                      width: 40,
-                      height: 40,
-                      borderRadius: radii.pill,
-                      borderWidth: 2,
-                      borderColor: selected ? colors.primary : colors.borderStrong,
-                      backgroundColor: selected ? colors.primarySoft : colors.bgElevated,
-                      alignItems: 'center',
-                      justifyContent: 'center',
-                    }}
-                  >
-                    {selected ? <Icon name="check" size={24} color={colors.primary} /> : null}
-                  </View>
-                  <Text variant="title" style={{ flex: 1 }}>
-                    {label}
-                  </Text>
-                </View>
-              </Card>
-            </PressableScale>
-          );
-        })}
-      </View>
+      <LanguagePicker value={languageCode} onChange={choose} />
     </Screen>
   );
 }

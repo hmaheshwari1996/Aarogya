@@ -59,6 +59,7 @@ import {
 import {
   deleteDocument,
   getDocument,
+  setDocumentPinned,
   updateDocument,
   type DocumentRecord,
 } from '@/db/repositories/contacts';
@@ -123,6 +124,15 @@ const STRINGS: LocalStrings = {
     en: 'Kept on this phone only. It is included in a backup you make yourself.',
     hi: 'सिर्फ़ इसी फ़ोन में रखा है। आपके ख़ुद बनाए बैकअप में यह शामिल होता है।',
   },
+
+  // ── Keeping it to hand ─────────────────────────────────────────────────────
+  // A pin is a per-DEVICE view preference, not a fact about the record: it does not sync
+  // (see the `isPinned` note in contacts.ts). The word carries the meaning; no pin glyph
+  // exists in the icon set and one is not worth adding for a single control.
+  'briefcase.pin': { en: 'Pin to Top', hi: 'ऊपर पिन कीजिए' },
+  'briefcase.unpin': { en: 'Remove the Pin', hi: 'पिन हटाइए' },
+  'briefcase.pinned': { en: 'Pinned to the top', hi: 'ऊपर पिन कर दिया' },
+  'briefcase.unpinned': { en: 'Pin removed', hi: 'पिन हटा दिया' },
 
   // ── Changing and removing ──────────────────────────────────────────────────
   'briefcase.rename': { en: 'Change the Name', hi: 'नाम बदलिए' },
@@ -361,6 +371,23 @@ export default function BriefcaseDocumentScreen() {
     }
   }, [data, draftTitle, reload, t, toast]);
 
+  const togglePin = useCallback(async () => {
+    if (!data) return;
+    setWorking(true);
+    try {
+      await setDocumentPinned(data.id, !data.isPinned);
+      toast.show({
+        message: t(data.isPinned ? 'briefcase.unpinned' : 'briefcase.pinned'),
+        variant: 'success',
+      });
+      reload();
+    } catch {
+      toast.show({ message: t('errors.saveFailed'), variant: 'error' });
+    } finally {
+      setWorking(false);
+    }
+  }, [data, reload, t, toast]);
+
   const remove = useCallback(async () => {
     if (!data) return;
     const ok = await confirm({
@@ -538,6 +565,14 @@ export default function BriefcaseDocumentScreen() {
           variant="secondary"
           size="lg"
           fullWidth
+        />
+        <Button
+          title={t(data.isPinned ? 'briefcase.unpin' : 'briefcase.pin')}
+          onPress={() => void togglePin()}
+          variant="secondary"
+          size="lg"
+          fullWidth
+          disabled={working}
         />
         <Button
           title={t('briefcase.remove')}

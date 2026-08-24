@@ -73,7 +73,7 @@ const STRINGS: LocalStrings = {
   },
 };
 
-type Destination = '/(tabs)' | '/setup' | '/(viewer)';
+type Destination = '/(tabs)' | '/setup' | '/setup/language' | '/(viewer)';
 
 async function boot(): Promise<Destination> {
   // ── THE DEVELOPER LOG IS HYDRATED BEFORE ANYTHING ELSE HAPPENS ──
@@ -166,7 +166,12 @@ async function boot(): Promise<Destination> {
   const role = await getAppRole();
 
   if (role === 'viewer') return '/(viewer)';
-  if (!profileId) return '/setup';
+  // A truly fresh install — no profile yet, so step 1 has never run — lands on the language
+  // picker FIRST (item 8): a woman who cannot read English cannot be asked, in English, which
+  // language she reads, so the very first screen is the endonym list, and Continue leads into
+  // the wizard. The moment step 1 creates her profile this branch stops firing, so a resuming
+  // user (profile exists, setup unfinished) drops to '/setup' below and is never re-asked.
+  if (!profileId) return '/setup/language';
 
   const setupDone = (await getMeta(META_SETUP_DONE)) === '1';
   if (!setupDone) return '/setup';

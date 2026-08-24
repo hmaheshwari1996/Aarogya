@@ -39,6 +39,7 @@ import {
   TextField,
   useToast,
 } from '@/components/ui';
+import { ActiveProfileTag } from '@/app/profiles/_lib';
 import { useAsync, useT, useProfileId, type LocalStrings } from '@/app/_shared/lib';
 import { useI18n } from '@/i18n';
 import { useDateFormat } from '@/i18n/useDateFormat';
@@ -360,6 +361,10 @@ export default function NewLabScreen() {
       }
     >
       <ScreenHeader title={t('labsNew.title')} onBack={() => router.back()} />
+
+      {/* Whose lab this is — the active profile is a device-global pointer a carer can have
+          switched. No-ops on a single-profile install. */}
+      <ActiveProfileTag />
 
       {/* ── The primary action, above everything else on the screen ───────────── */}
       <Card style={{ gap: spacing.md }}>

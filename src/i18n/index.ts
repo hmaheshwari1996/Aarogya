@@ -32,32 +32,65 @@ import React, {
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as Localization from 'expo-localization';
 
-import en from './en.json';
-import hi from './hi.json';
+import { LANGUAGES, RESOURCES, SUPPORTED_LANGUAGE_CODES } from './languages';
+import { resolveKey } from './resolve';
 
+/**
+ * THE TWO LANGUAGE TYPES, AND WHY THERE ARE TWO.
+ *
+ * `LanguageCode` is any code the registry offers — 'en', 'hi', 'bn', … It is the FULL UI
+ * language: what `t()` resolves against, what the picker selects, what is stored. The set is
+ * DATA (see `languages.ts`), never a compile-time union, so a language added there needs no
+ * change here.
+ *
+ * `Language` is the narrower 'en' | 'hi' — the BILINGUAL BASE. A great deal of this app picks
+ * between exactly two hand-authored strings: a DB row's `labelEn`/`labelHi`, an inline
+ * `{ en, hi }`, the `report.*` bundle that must stay English. There is no third column and
+ * never will be one per optional language, so those sites receive `lang`, which is the full
+ * language REDUCED to its base: en/hi map to themselves, and every optional language reduces
+ * to 'en' — which is precisely its English fallback. Keeping `lang` at 'en' | 'hi' is what
+ * lets an optional language ship without touching a single one of those bilingual call sites:
+ * they were already correct for 'en', and an untranslated optional language IS 'en' to them.
+ *
+ * So: read `lang` to choose between two authored strings; read `languageCode` (or call `t`)
+ * when you need the actual UI language.
+ */
 export type Language = 'en' | 'hi';
+export type LanguageCode = string;
 
 export type TranslationParams = Readonly<Record<string, string | number>>;
 
 export type TranslateFn = (key: string, params?: TranslationParams) => string;
 
-type TranslationTree = { readonly [key: string]: string | TranslationTree };
-
 const LANGUAGE_STORAGE_KEY = 'aarogya.ui.language';
 
-export const SUPPORTED_LANGUAGES: readonly Language[] = ['en', 'hi'];
+export { LANGUAGES, endonymOf } from './languages';
+export type { LanguageDef } from './languages';
 
-const RESOURCES: Record<Language, TranslationTree> = { en, hi };
+export const SUPPORTED_LANGUAGES: readonly LanguageCode[] = LANGUAGES.map(
+  (language) => language.code,
+);
 
-function isLanguage(value: string | null | undefined): value is Language {
-  return value === 'en' || value === 'hi';
+/** Reduce a full UI language to the base it draws its two authored strings from. */
+export function baseLanguage(code: LanguageCode): Language {
+  return code === 'hi' ? 'hi' : 'en';
+}
+
+function isSupportedCode(value: string | null | undefined): value is LanguageCode {
+  return typeof value === 'string' && SUPPORTED_LANGUAGE_CODES.has(value);
 }
 
 /**
  * Device default. Wrapped in try/catch because `getLocales()` reads a native module,
  * and this function runs at module scope — before any error boundary exists.
+ *
+ * DELIBERATELY only auto-selects a FULL bundle (en/hi). A phone set to, say, Bengali does
+ * NOT auto-select the optional Bengali bundle: shipped empty, it would render a wholly
+ * English app while claiming to be Bengali, which is worse than plain English. An optional
+ * language is opt-IN through the picker, where the choice is explicit. Once its bundle
+ * carries real strings a human can add its code to this check.
  */
-function detectDeviceLanguage(): Language {
+function detectDeviceLanguage(): LanguageCode {
   try {
     const locales = Localization.getLocales();
     const primary = locales[0];
@@ -74,9 +107,9 @@ function detectDeviceLanguage(): Language {
  * rebuild, for instance) is already in the right language, then corrected once the
  * stored preference is hydrated.
  */
-let currentLanguage: Language = detectDeviceLanguage();
+let currentLanguage: LanguageCode = detectDeviceLanguage();
 
-export function getLanguage(): Language {
+export function getLanguage(): LanguageCode {
   return currentLanguage;
 }
 
@@ -94,28 +127,16 @@ function interpolate(template: string, params: TranslationParams): string {
   });
 }
 
-function lookup(tree: TranslationTree, key: string): string | undefined {
-  let node: string | TranslationTree | undefined = tree;
-  for (const segment of key.split('.')) {
-    if (typeof node !== 'object' || node === null) return undefined;
-    node = node[segment];
-  }
-  return typeof node === 'string' ? node : undefined;
-}
-
-function translate(language: Language, key: string, params?: TranslationParams): string {
-  let value = lookup(RESOURCES[language], key);
-
-  if (value === undefined && language !== 'en') {
-    // English is the fallback, not the key. A doctor-facing or freshly added string
-    // showing in English is recoverable; showing 'medicines.stopReason' is not.
-    value = lookup(RESOURCES.en, key);
-    if (value !== undefined && __DEV__) {
-      console.warn(`[i18n] key "${key}" is missing in "${language}", fell back to English`);
-    }
-  }
+function translate(language: LanguageCode, key: string, params?: TranslationParams): string {
+  // `resolveKey` walks the current language, then falls back to English — the fallback that
+  // makes an optional bundle safe to ship half-translated. It returns undefined ONLY when
+  // the key is in neither, which is a real missing key, not a translation gap.
+  const value = resolveKey(RESOURCES, language, key);
 
   if (value === undefined) {
+    // Degrade to the key itself, never a throw: a gap must give an ugly screen, not a crash
+    // on a screen about to record a blood pressure. (No per-key "fell back to English" warn:
+    // on a barely-translated optional language that would fire on almost every string.)
     if (__DEV__) console.warn(`[i18n] missing translation key "${key}"`);
     return key;
   }
@@ -133,8 +154,11 @@ export function t(key: string, params?: TranslationParams): string {
 }
 
 export type I18nContextValue = {
+  /** The bilingual base ('en' | 'hi'): what to pass a two-string chooser. Optional → 'en'. */
   lang: Language;
-  setLang: (next: Language) => void;
+  /** The full UI language ('en' | 'hi' | 'bn' | …): what the picker selects and stores. */
+  languageCode: LanguageCode;
+  setLang: (next: LanguageCode) => void;
   t: TranslateFn;
   /** False until the stored preference has been read. Useful for holding the splash. */
   ready: boolean;
@@ -143,7 +167,7 @@ export type I18nContextValue = {
 const I18nContext = createContext<I18nContextValue | null>(null);
 
 export function I18nProvider({ children }: { children: ReactNode }) {
-  const [lang, setLangState] = useState<Language>(currentLanguage);
+  const [languageCode, setLanguageCode] = useState<LanguageCode>(currentLanguage);
   const [ready, setReady] = useState(false);
 
   useEffect(() => {
@@ -151,9 +175,9 @@ export function I18nProvider({ children }: { children: ReactNode }) {
     AsyncStorage.getItem(LANGUAGE_STORAGE_KEY)
       .then((stored) => {
         if (cancelled) return;
-        if (isLanguage(stored)) {
+        if (isSupportedCode(stored)) {
           currentLanguage = stored;
-          setLangState(stored);
+          setLanguageCode(stored);
         }
       })
       .catch((error) => {
@@ -167,24 +191,28 @@ export function I18nProvider({ children }: { children: ReactNode }) {
     };
   }, []);
 
-  const setLang = useCallback((next: Language) => {
+  const setLang = useCallback((next: LanguageCode) => {
     // The module-level pointer is updated first, so a notification scheduled in the
     // same tick as the switch is already built in the new language.
     currentLanguage = next;
-    setLangState(next);
+    setLanguageCode(next);
     AsyncStorage.setItem(LANGUAGE_STORAGE_KEY, next).catch((error) => {
       console.warn('[i18n] could not save the language preference', error);
     });
   }, []);
 
+  // The full code drives translation (bn resolves bn→en per key); the reduced base is what
+  // the bilingual call sites read. Both derive from the one piece of state.
+  const lang = baseLanguage(languageCode);
+
   const boundTranslate = useCallback<TranslateFn>(
-    (key, params) => translate(lang, key, params),
-    [lang],
+    (key, params) => translate(languageCode, key, params),
+    [languageCode],
   );
 
   const value = useMemo<I18nContextValue>(
-    () => ({ lang, setLang, t: boundTranslate, ready }),
-    [lang, setLang, boundTranslate, ready],
+    () => ({ lang, languageCode, setLang, t: boundTranslate, ready }),
+    [lang, languageCode, setLang, boundTranslate, ready],
   );
 
   // No JSX here on purpose: this file is `index.ts`, not `.tsx`, because the whole

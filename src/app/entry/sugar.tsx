@@ -101,6 +101,7 @@ import {
   useToast,
   type NumberPadField,
 } from '@/components/ui';
+import { ActiveProfileTag } from '@/app/profiles/_lib';
 import {
   METRIC_SUGAR,
   SUGAR_CONTEXTS,
@@ -788,6 +789,9 @@ export default function SugarEntryScreen() {
           subtitle={t('entry.sugar.helper')}
           onBack={guardedBack}
         />
+        {/* Whose reading this is — a device-global pointer a carer can have switched, and a
+            sugar filed onto the wrong patient is a medical error. No-ops on single-profile. */}
+        <ActiveProfileTag />
         <EntryWhenBar when={when} />
 
         <Text variant="label" style={{ paddingTop: spacing.lg, paddingBottom: spacing.md }}>

@@ -83,6 +83,9 @@ export const DEFAULT_PAGE_ONE_LIMITS: PageOneLimits = {
 /** The appendix is long, not infinite. Past this, the CSV export is the right tool. */
 const APPENDIX_ROW_CAP = 400;
 
+/** Her notes on page one, per symptom, newest first. The rest wait in the appendix. */
+const SYMPTOM_NOTES_ON_PAGE_ONE = 2;
+
 export type BuildOpdOptions = {
   limits?: Partial<PageOneLimits>;
   /** False produces page one alone — the "just the summary" share. */
@@ -402,6 +405,8 @@ type SymptomGroup = {
   dates: string[];
   severities: Set<string>;
   lastOn: string;
+  /** Her own words, newest first — what she typed when she logged this symptom. */
+  notes: { date: string; note: string }[];
 };
 
 export function groupSymptoms(symptoms: readonly ReportSymptom[]): SymptomGroup[] {
@@ -413,11 +418,16 @@ export function groupSymptoms(symptoms: readonly ReportSymptom[]): SymptomGroup[
       dates: [],
       severities: new Set<string>(),
       lastOn: symptom.localDate,
+      notes: [],
     };
     group.count += 1;
     if (!group.dates.includes(symptom.localDate)) group.dates.push(symptom.localDate);
     if (symptom.severity) group.severities.add(symptom.severity);
     if (symptom.localDate > group.lastOn) group.lastOn = symptom.localDate;
+    // A blank/whitespace note is not a note. Newest first, so the summary shows what she
+    // said most recently and the appendix carries the rest verbatim.
+    const trimmed = symptom.note?.trim();
+    if (trimmed) group.notes.unshift({ date: symptom.localDate, note: trimmed });
     groups.set(symptom.label, group);
   }
   return [...groups.values()].sort((a, b) => b.count - a.count || b.lastOn.localeCompare(a.lastOn));
@@ -436,7 +446,7 @@ function renderSymptoms(data: OpdReportData, limits: PageOneLimits): string {
       const dates = group.dates.slice().sort();
       const shownDates = dates.slice(-10).map(formatDate).join(', ');
       const more = dates.length > 10 ? ` (+${dates.length - 10} earlier)` : '';
-      return [
+      const main = [
         '<tr>',
         `<td>${escapeHtml(group.label)}</td>`,
         `<td class="num">${group.count}</td>`,
@@ -444,6 +454,22 @@ function renderSymptoms(data: OpdReportData, limits: PageOneLimits): string {
         `<td class="timeline-dates">${escapeHtml(shownDates + more)}</td>`,
         '</tr>',
       ].join('');
+      // Her notes UNDER the symptom, most recent first — page one is a summary, so cap it
+      // and defer the rest to the appendix's full "All reported symptoms" table.
+      const notes = group.notes.slice().sort((a, b) => b.date.localeCompare(a.date));
+      const noteShown = notes.slice(0, SYMPTOM_NOTES_ON_PAGE_ONE);
+      if (noteShown.length === 0) return main;
+      const items = noteShown
+        .map((n) => `<li>${escapeHtml(`${formatDate(n.date)}: “${n.note}”`)}</li>`)
+        .join('');
+      const overflow =
+        notes.length > noteShown.length
+          ? `<li class="muted">${escapeHtml(
+              `${notes.length - noteShown.length} more in the appendix.`,
+            )}</li>`
+          : '';
+      const noteRow = `<tr class="note-row"><td colspan="4"><ul class="symptom-notes">${items}${overflow}</ul></td></tr>`;
+      return main + noteRow;
     })
     .join('');
 

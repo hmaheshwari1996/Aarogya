@@ -31,11 +31,25 @@ internal data class AlarmRule(
   val escalateAfterMin: List<Int>
 )
 
+/**
+ * A one-off per-date ring move. The occurrence keeps its identity (`timeLocal` is the
+ * ORIGINAL slot time the occurrence id is built from); only the ring epoch shifts to
+ * `overrideTimeLocal` on `localDate`. See Materializer.expand — it SHIFTS, never adds.
+ */
+internal data class AlarmException(
+  val threadId: String,
+  val localDate: String,
+  val timeLocal: String,
+  val overrideTimeLocal: String
+)
+
 internal data class Horizon(
   val schemaVersion: Int,
   val writtenAtEpoch: Long,
   val profileId: String,
   val rules: List<AlarmRule>,
+  /** Per-date ring moves. Empty is the norm; an empty list leaves expansion unchanged. */
+  val exceptions: List<AlarmException>,
   /** Rules the parser had to drop. Non-zero is a bug in JS, and the health probe shows it. */
   val droppedRules: Int
 )
@@ -82,11 +96,30 @@ internal object HorizonStore {
         if (rule == null) dropped++ else rules.add(rule)
       }
     }
+    val exArr = root.optJSONArray("exceptions")
+    val exceptions = ArrayList<AlarmException>()
+    if (exArr != null) {
+      for (i in 0 until exArr.length()) {
+        val e = exArr.optJSONObject(i) ?: continue
+        val threadId = e.optString("threadId", "")
+        val localDate = e.optString("localDate", "")
+        val timeLocal = e.optString("timeLocal", "")
+        val overrideTimeLocal = e.optString("overrideTimeLocal", "")
+        // Every field is load-bearing for a precise match. A malformed exception is dropped,
+        // which is safe: the ring simply stays at its rule time — never a second alarm.
+        if (threadId.isNotEmpty() && DATE_RE.matches(localDate) &&
+          TIME_RE.matches(timeLocal) && TIME_RE.matches(overrideTimeLocal)
+        ) {
+          exceptions.add(AlarmException(threadId, localDate, timeLocal, overrideTimeLocal))
+        }
+      }
+    }
     Horizon(
       schemaVersion = root.optInt("schemaVersion", 0),
       writtenAtEpoch = root.optLong("writtenAtEpoch", 0L),
       profileId = root.optString("profileId", ""),
       rules = rules,
+      exceptions = exceptions,
       droppedRules = dropped
     )
   } catch (t: Throwable) {

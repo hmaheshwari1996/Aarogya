@@ -48,6 +48,7 @@ import {
   TextField,
   useToast,
 } from '@/components/ui';
+import { ActiveProfileTag } from '@/app/profiles/_lib';
 import { addDocument } from '@/db/repositories/contacts';
 
 import { useProfileId, useT, type LocalStrings } from '../_shared/lib';
@@ -408,6 +409,10 @@ export default function AddToBriefcaseScreen() {
       }
     >
       <ScreenHeader title={t('briefcase.addTitle')} onBack={() => router.back()} />
+
+      {/* Whose document this is — the active profile is a device-global pointer a carer can
+          have switched. No-ops on a single-profile install. */}
+      <ActiveProfileTag />
 
       {/* ── 1. Which paper ────────────────────────────────────────────────────── */}
       <SectionHeader title={t('briefcase.chooseHow')} />

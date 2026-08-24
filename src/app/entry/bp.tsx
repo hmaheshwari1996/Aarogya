@@ -34,6 +34,7 @@ import {
   useToast,
   type NumberPadField,
 } from '@/components/ui';
+import { ActiveProfileTag } from '@/app/profiles/_lib';
 import {
   METRIC_BP,
   META_BP_STICKY,
@@ -338,6 +339,10 @@ export default function BpEntryScreen() {
           subtitle={t('entry.bp.helper')}
           onBack={guardedBack}
         />
+        {/* Whose reading this is — the active profile is a device-global pointer a carer can
+            have switched, and a BP filed onto the wrong patient is a medical error. Shown on
+            the first step of the flow, before any number is entered. No-ops when solo. */}
+        <ActiveProfileTag />
         <EntryWhenBar when={when} />
 
         <Text variant="label" style={{ paddingTop: spacing.lg, paddingBottom: spacing.md }}>

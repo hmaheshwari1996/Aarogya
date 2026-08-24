@@ -149,6 +149,14 @@ export const TABLES = {
   // filesystem, and shipping "delete /data/user/0/…/briefcase/abc.pdf" to a family
   // member's phone would name a file that never existed there.
   pending_file_delete: { pk: 'id', hasCreatedAt: false, hasUpdatedAt: false, hasLamport: false, hasSoftDelete: false, sync: false },
+  // Reserved and EMPTY until family sharing ships (migration v7, per docs/MULTI-DEVICE-SYNC-DESIGN.md
+  // §5). Local-only — membership is managed by a profile's owner, never merged between devices,
+  // so `sync: false`. `pk` names `share_id` for the type's sake, but the real key is composite
+  // (share_id, device_id): writes will go through hand-written SQL like `profile_condition`
+  // does, not the generic writers here, which address a single-column pk. No metadata columns —
+  // it carries `added_at_epoch`/`removed_at_epoch`, which are membership facts, not the
+  // created/updated stamps the writers manage.
+  profile_member: { pk: 'share_id', hasCreatedAt: false, hasUpdatedAt: false, hasLamport: false, hasSoftDelete: false, sync: false },
 } as const satisfies Record<string, TableSpec>;
 
 export type TableName = keyof typeof TABLES;

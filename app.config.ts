@@ -78,7 +78,7 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
     // Bump on EVERY build you install anywhere. Android refuses an install whose
     // versionCode is not higher than the one already present, and two different APKs
     // sharing a number is how you end up unsure which one is on the phone.
-    versionCode: 9,
+    versionCode: 10,
     adaptiveIcon: {
       foregroundImage: './assets/images/adaptive-icon.png',
       backgroundColor: '#0E7C6B',

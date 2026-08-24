@@ -31,7 +31,8 @@ import { OCCURRENCE_STATUS_COPY } from '@/features/dosing/deriveStatus';
 import { censoredUnitText } from '@/features/reports/data/censored';
 import { seedReferenceData } from '@/db/seed';
 import { getDb, queryAll, queryFirst, type Tx } from '@/db/repositories/_shared';
-import { getDefaultProfile } from '@/db/repositories/profiles';
+import { getDefaultProfile, listProfiles } from '@/db/repositories/profiles';
+import { getActiveProfileId } from '@/db/repositories/settings';
 import type { StatRange } from '@/components/ui';
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -398,24 +399,61 @@ export async function ensureRegistrySeeded(): Promise<void> {
 
 let cachedProfileId: string | null = null;
 
+/**
+ * Drop the memo so the next `resolveProfileId()` re-reads the active pointer.
+ *
+ * MUST be called by the profile switcher after `setActiveProfileId`, and by anything that
+ * archives or creates a profile. Without it a switch would set the pointer in `app_meta` but
+ * every already-mounted screen would keep reading the OLD profile from this memo until the
+ * process restarted — a wrong-patient view, which invites a wrong-patient ENTRY. Screens
+ * re-run their loaders on focus (`useReloadOnFocus`), so a switch + invalidate + navigate is
+ * all it takes for the whole app to swing to the new profile.
+ */
 export function invalidateProfileCache(): void {
   cachedProfileId = null;
 }
 
+/**
+ * The profile whose data every screen reads and writes — the ACTIVE (viewed) profile.
+ *
+ * ─── VIEW SELECTOR, NOT ALARM SELECTOR (safety rule R1) ──────────────────────
+ * This chooses whose rows the UI shows. It does NOT choose whose reminders ring: the alarm
+ * horizon is device-wide (see `features/dosing/deviceHorizon.ts`), so every non-archived
+ * profile's doses keep ringing no matter who is on screen. Switching this value moves the
+ * view and nothing else — it can never stop, drop or double another profile's TB dose.
+ *
+ * The active pointer lives in `app_meta` (device-local, never synced — see
+ * repositories/settings.ts). It is VALIDATED here rather than trusted: a pointer can be null
+ * (never chosen — the single-profile install), or stale (its profile was archived, and
+ * `archiveProfile` deliberately does not reach in to clear it). Either way we fall back to
+ * the default profile, which `archiveProfile`/`setDefaultProfile` guarantee always exists.
+ * `listProfiles()` returns only live (non-archived) profiles, so an archived id fails the
+ * membership check and drops to the fallback.
+ */
 export async function resolveProfileId(): Promise<string | null> {
   if (cachedProfileId) return cachedProfileId;
-  const profile = await getDefaultProfile();
-  cachedProfileId = profile?.id ?? null;
+
+  const active = await getActiveProfileId();
+  if (active) {
+    const profiles = await listProfiles();
+    if (profiles.some((profile) => profile.id === active)) {
+      cachedProfileId = active;
+      return cachedProfileId;
+    }
+  }
+
+  const fallback = await getDefaultProfile();
+  cachedProfileId = fallback?.id ?? null;
   return cachedProfileId;
 }
 
 /**
- * The active profile id.
+ * The active profile id, as async screen state.
  *
- * There is exactly one patient per install in v1 — the son's phone runs the viewer
- * variant, not a second profile — so this is a lookup with a module-level memo rather
- * than a context. A context would force every screen through a provider it does not
- * otherwise need, and the id genuinely never changes inside a session.
+ * A lookup with a module-level memo rather than a context: a context would force every
+ * screen through a provider it does not otherwise need, and the id changes only when the
+ * user switches profiles — at which point `invalidateProfileCache()` clears the memo and
+ * screens reload on focus.
  */
 export function useProfileId(): AsyncState<string | null> {
   return useAsync(() => resolveProfileId(), []);

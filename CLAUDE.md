@@ -12,8 +12,8 @@ holds the key to. That is why most rules below exist.
 
 The user is an elderly woman in India managing cardiac disease, type-2 diabetes and **active
 tuberculosis**; presbyopia, a tremor, large-text mode, reads Hindi and English. Her son built
-it. Build 8 is on her phone; build 9 is built and sitting in `build-output/`, not yet
-installed.
+it. Build 8 is on her phone; build 11 (the family-sharing build) is built and sitting in
+`build-output/`, not yet installed.
 
 The source comments the WHY and the traps at length. Match that voice: when you write a
 rule, write the failure it prevents.
@@ -61,7 +61,7 @@ npm run check:all       # typecheck + check:i18n + check:clinical + check:bundle
 ```
 
 **`check:all` does NOT run `lint` or `test`.** Run those separately, every time. Baseline
-to hold: tsc clean, eslint 0/0, 655 tests passing, i18n 559 = 559, clinical clean.
+to hold: tsc clean, eslint 0/0, 681 tests passing, i18n 559 = 559, clinical clean.
 
 `i18n 559 = 559` counts `src/i18n/*.json` and does NOT move when a screen gains copy —
 new strings belong in that screen's `LocalStrings` map (see UI conventions). A jump in
@@ -193,9 +193,23 @@ orphans every reading recorded against it.
 
 Optional family sharing. `getSyncConfig()` returning null is the NORMAL case and every
 function here must return quietly on an unconfigured phone — no throw, no log, no UI. The
-server sees ciphertext, a link id, lamports and timestamps; the key rides in the link's
-`#fragment`, which no HTTP client ever transmits. **The patient's device is the only
-writer** — viewers are read-only, and `outbox.ts` has no conflict resolution because of it.
+server sees ciphertext, a link id, lamports/ms-timestamps, per-device public keys and sealed
+push tokens — never a name, dose, drug, document, role, or the profile key; the key rides in
+the link's `#fragment` (legacy single-viewer share) or is wrapped per-device
+(`sync_key_wrap`), and never reaches Supabase. **Two share models coexist.** The legacy
+single-viewer share (`sync_record` + `sync_share`, patient is the only writer, `outbox.ts`
+has no conflict resolution) is unchanged. The **v2 family-sharing model** (P1+P2, LOCKED
+DECISIONS in `docs/MULTI-DEVICE-SYNC-DESIGN.md`; contract in `docs/FAMILY-SHARING-CONTRACT.md`;
+threat model + schema in `docs/SYNC-AND-BACKUP.md` §13–15) is **MULTI-WRITER**: one Owner + N
+Managers publish to the `sync_row` stream, per-(table,row) **last-write-wins by millisecond
+modified-time** (relay-enforced by the `sync_row_lww` trigger), `dose_event` unions. Roles
+(owner/manager/viewer) and member removal are **client-side trust only** — the relay is a
+blind postbox that can enforce link-isolation but not per-device auth (read §13 before
+"tightening" the RLS). A **manager edit to a MEDICINE or SCHEDULE lands unconfirmed** on the
+owner device (author-blind gate in `rowStream.ts`, reusing the confirmed-medicine triggers) —
+a remote edit must never silently change what the owner phone rings (C2). A **non-owner device
+schedules NO alarms** for a profile it does not own (`deviceHorizon.ts` skips it) and gets
+**push only** (send side: `push.ts`; receive side deliberately deferred — see below).
 
 - **Both upload paths `SELECT *`**, so a column added anywhere starts travelling without
   anyone deciding it should. `redact.ts::stripLocalPaths()` is the one decision that has
@@ -210,8 +224,17 @@ writer** — viewers are read-only, and `outbox.ts` has no conflict resolution b
   set. A test pins them against restore.ts's source. Widen both or neither.
 - A key **dropped**, never nulled: `{image_uri: null}` asserts there is no image, which is
   false — it is on her phone and staying there.
-- **Nothing reads the record stream yet**; the viewer renders only the sealed snapshot. Do
-  not add fields for a reader that does not exist.
+- **The legacy record stream is still read-nothing**; that viewer renders only the sealed
+  snapshot. The v2 `sync_row` stream IS read (`rowStream.ts` pulls, decrypts under the
+  profile key, runs the same ms-LWW locally). Its cursor **freezes at the first
+  undecryptable row** (post-rotation generation a stale key-holder cannot open), never
+  advancing past it, so a rewrap recovers every row rather than skipping it forever.
+- **The push RECEIVE path is NOT built this round (C1 decision).** `expo-notifications` stays
+  banned project-wide (a second scheduler double-fires a dose); `check:scheduler` guards that
+  `src/features/sync/pushReceive.ts` does not exist yet. The SEND side is fully built
+  (`push.ts::sendFamilyPing` — a plain content-free `fetch` to Expo, no medical fact in the
+  payload). The recommended receive path is a native receive-only FCM channel `family_ping_v1`
+  (id reserved in `channels.js`) that NEVER schedules a dose.
 
 ## Slots — `src/features/slots/registry.ts`
 
@@ -388,12 +411,13 @@ npm run build:prod          # or build:qa, or build:prod:aab
   nothing when the tree is dirty and the prompt is declined, so the script deletes the
   directory itself. Never hand-edit `android/`, and never run the build from inside it.
 - **Bump `versionCode` in `app.config.ts` on every build you install anywhere.** Currently
-  9. Android refuses an install whose code is not higher, and two APKs sharing a number is
+  11. Android refuses an install whose code is not higher, and two APKs sharing a number is
   how you stop knowing what is on the phone. Bump it before the build, not after: the
   artifact is named `aarogya-prod-v<version>-build<code>.apk`, so rebuilding at the old
   number overwrites the file for the build that is actually on her phone — the same
   confusion the rule exists to prevent, arriving through the back door.
-- APK budget **32 MB** (`scripts/check-size.js`); build 9 is 28.39 MB, 3.61 MB of headroom.
+- APK budget **32 MB** (`scripts/check-size.js`); build 11 is 28.59 MB, ~3.4 MB of headroom
+  (family sharing added ~0.2 MB — the sync crypto reuses `@noble/*`, no new native `.so`).
   Raise it only with a line in `docs/SIZE.md` saying what was added and why.
 - `AAROGYA_DISTRIBUTION` decides the permission set and nothing else: `personal` declares
   the non-revocable `USE_EXACT_ALARM`, `play` falls back to the revocable

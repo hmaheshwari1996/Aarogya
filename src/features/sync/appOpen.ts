@@ -28,7 +28,7 @@
  * sealed from a database that is already caught up.
  */
 
-import { drainOutboxFully } from './outbox';
+import { drainOutboxFully, publishSharedProfiles } from './outbox';
 import { publishSnapshot } from './snapshot';
 
 let inFlight = false;
@@ -50,8 +50,15 @@ export async function syncOnAppOpen(): Promise<void> {
 
   try {
     const drained = await drainOutboxFully();
-    if (drained.skipped === 'not_configured' || drained.skipped === 'no_key') return;
 
+    // v2 family sharing runs whether or not the legacy path had a global key. PUBLISH BEFORE
+    // PULL: draining our own edits to `sync_row` first is what makes the puller-side LWW safe
+    // (our edits are the relay winner before we apply anyone's — rowStream.ts). A device with no
+    // family-shared profile finds nothing here and returns quietly.
+    await syncFamilyShares();
+
+    // The legacy public-link snapshot only makes sense on a device that has the old global key.
+    if (drained.skipped === 'not_configured' || drained.skipped === 'no_key') return;
     await publishSnapshot();
   } catch (error) {
     // Deliberately swallowed. Sharing failing is a visibility problem for family; the
@@ -63,7 +70,62 @@ export async function syncOnAppOpen(): Promise<void> {
   }
 }
 
+/**
+ * Publish then pull every family-shared profile.
+ *
+ * Publish-before-pull is the whole reason the puller-side LWW in rowStream can compare against a
+ * bare `updated_at_epoch`: this device's edits reach the relay before it applies anyone else's,
+ * so the pulled winner is the true merged result. Each step no-ops quietly when unconfigured;
+ * failures are swallowed by the caller and retried next open.
+ */
+async function syncFamilyShares(): Promise<void> {
+  await publishSharedProfiles();
+
+  const { getSyncConfig } = await import('./config');
+  const { listSharedProfiles } = await import('../../db/repositories/members');
+  const { pullAndApplyShare } = await import('./rowStream');
+  const { acceptProfileKeyWrap } = await import('./membership');
+  const config = await getSyncConfig();
+  const shared = await listSharedProfiles();
+  if (shared.length === 0) return;
+
+  for (const profile of shared) {
+    if (!profile.shareId) continue;
+    // A MEMBER (non-owner) device re-checks for a wrapped profile key it has not installed yet:
+    // the first release after the owner approves it, and every later generation-G+1 re-wrap after
+    // a removal rotates the key. The owner holds its key from mint and skips this. When a newer
+    // generation lands, acceptProfileKeyWrap resets the pull cursor, so the pull just below
+    // re-reads the stream re-encrypted under the key it just gained — without that a rotated-in
+    // member would decrypt nothing and freeze at its old generation.
+    if (config && profile.ownerDeviceId !== config.deviceId) {
+      await acceptProfileKeyWrap(profile.shareId);
+    }
+    await pullAndApplyShare(profile.shareId);
+  }
+
+  // Stamped only after every shared profile pulled without throwing, so the time shown in
+  // Settings means "this phone genuinely had the others' changes then". A stamp written on
+  // attempt would turn a week of failed syncs into a reassuring recent timestamp, which is
+  // the one thing a family member checking whether the record is current must not be told.
+  const { setLastSyncAt } = await import('../../db/repositories/settings');
+  await setLastSyncAt(Date.now());
+}
+
 /** Test seam — lets a test observe the guard without waiting for a real run. */
 export function __resetSyncInFlightForTests(): void {
   inFlight = false;
 }
+
+/**
+ * Sync now, on demand.
+ *
+ * Shares `syncOnAppOpen`'s in-flight guard, so a tap while a boot sync is still running is a
+ * no-op rather than a second racing publish. Returns whether a run actually happened, which
+ * is what lets the caller say "already syncing" instead of flashing a success it did not do.
+ */
+export async function syncNow(): Promise<boolean> {
+  if (inFlight) return false;
+  await syncOnAppOpen();
+  return true;
+}
+

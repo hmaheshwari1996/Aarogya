@@ -312,7 +312,11 @@ export default function SharingScreen() {
     if (!validate()) return;
     setBusy(true);
     try {
-      await setSyncConfig({ url: projectUrl, anonKey, enabled: true, role: 'patient' });
+      // The device that turns sharing on is the profile's OWNER (the creator, the ringer).
+      // `'patient'` was this role's name in the single-writer era; v2 renamed it to `'owner'`
+      // (SyncRole in features/sync/merge.ts). An old phone's stored `'patient'` still reads as
+      // owner via `normaliseRole`; new writes use the new name.
+      await setSyncConfig({ url: projectUrl, anonKey, enabled: true, role: 'owner' });
       setProjectUrl('');
       setAnonKey('');
       setProbe(null);

@@ -71,6 +71,11 @@ const STRINGS: LocalStrings = {
     hi: 'यह अकेला मरीज़ है। इसे संग्रह करने से पहले कोई और जोड़ें।',
   },
   'profiles.switched': { en: 'Now showing {{name}}', hi: 'अब {{name}} दिख रहे हैं' },
+  'profiles.sharing': { en: 'Family Sharing', hi: 'परिवार साझा' },
+  'profiles.sharingHint': {
+    en: 'Share this patient with family. You choose who can see and who can help update — and the reminders keep ringing here.',
+    hi: 'इस मरीज़ को परिवार के साथ साझा करें। आप तय करती हैं कौन देख सकता है और कौन बदलाव में मदद कर सकता है — और याद-दिलावट यहीं बजती रहती है।',
+  },
 };
 
 type Loaded = {
@@ -231,6 +236,21 @@ export default function ProfileDetailScreen() {
               fullWidth
               disabled={!renameDirty || busy}
             />
+          </View>
+
+          {/* Family sharing — the detail lives in its own screen; this is just the way in,
+              so this file stays free of the sync feature and keeps compiling on its own. */}
+          <View style={{ gap: spacing.md }}>
+            <Button
+              title={t('profiles.sharing')}
+              onPress={() => router.push(`/sharing/${data.id}`)}
+              variant="secondary"
+              size="lg"
+              fullWidth
+            />
+            <Text variant="caption" tone="muted">
+              {t('profiles.sharingHint')}
+            </Text>
           </View>
 
           {/* Archive */}

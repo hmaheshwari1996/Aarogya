@@ -36,6 +36,40 @@ const DISTRIBUTION: Distribution =
  */
 const INVITE_HOST = process.env.AAROGYA_INVITE_HOST ?? 'REPLACE-ME.github.io';
 
+/**
+ * The shared family-sharing backend, BAKED INTO THE BUILD.
+ *
+ * Every install talks to the same Supabase project, so nobody is asked to paste a URL and a
+ * key — an elderly patient and her daughters cannot reasonably be handed credentials, and a
+ * feature that needs setup on four phones is a feature nobody turns on.
+ *
+ * ─── WHY SHIPPING THIS KEY IS SAFE, AND WHAT IT IS NOT ───────────────────────────────
+ * There is no way to HIDE a string in a client app: anything the app can read, so can anyone
+ * who unzips the APK. Obfuscating it would buy nothing but the illusion of secrecy. It is
+ * shipped in the clear because it is not a secret in the first place:
+ *
+ *   • The PUBLISHABLE (anon) key is designed to sit in clients. It grants nothing on its own —
+ *     every table is row-level-secured and filters on the `X-Share-Id` header, so a request
+ *     without a share id sees zero rows.
+ *   • A share id is 128 random bits, minted per profile and never published. Guessing one is
+ *     the entire attack, and it is not feasible.
+ *   • The relay only ever holds CIPHERTEXT. The profile key is wrapped to each member device
+ *     and never leaves it, so even someone holding both the anon key and a share id gets
+ *     blobs they cannot open. The encryption is the confidentiality boundary — not this key.
+ *
+ * The DATABASE PASSWORD is a real secret and is NOT here, is not in the repo, and never
+ * reaches a device: it lives in `~/.aarogya/supabase.env` and is used only to apply schema.
+ *
+ * ─── HOW IT GETS IN ──────────────────────────────────────────────────────────────────
+ * Injected at build time from the environment (`scripts/build-android.sh` sources
+ * `~/.aarogya/supabase.env`), so the credentials are NOT committed to the repository. A build
+ * without them still succeeds and simply ships with sharing unconfigured — which is why
+ * `build-android.sh` warns loudly rather than failing, and why Settings can still override
+ * both values at runtime for a different backend.
+ */
+const SUPABASE_URL = process.env.AAROGYA_SUPABASE_URL ?? '';
+const SUPABASE_ANON_KEY = process.env.AAROGYA_SUPABASE_ANON_KEY ?? '';
+
 const COMMON_PERMISSIONS = [
   'android.permission.POST_NOTIFICATIONS',
   'android.permission.RECEIVE_BOOT_COMPLETED',
@@ -71,6 +105,8 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
   extra: {
     distribution: DISTRIBUTION,
     inviteHost: INVITE_HOST,
+    supabaseUrl: SUPABASE_URL,
+    supabaseAnonKey: SUPABASE_ANON_KEY,
     router: {},
   },
   android: {
@@ -78,7 +114,7 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
     // Bump on EVERY build you install anywhere. Android refuses an install whose
     // versionCode is not higher than the one already present, and two different APKs
     // sharing a number is how you end up unsure which one is on the phone.
-    versionCode: 10,
+    versionCode: 13,
     adaptiveIcon: {
       foregroundImage: './assets/images/adaptive-icon.png',
       backgroundColor: '#0E7C6B',

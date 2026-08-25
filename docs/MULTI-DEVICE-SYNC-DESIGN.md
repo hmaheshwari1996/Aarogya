@@ -1,9 +1,12 @@
 # Multi-device shared management — design
 
-**Status: design, not built.** This is the answer to "how can Me, my mother and my
-sisters all manage my mother's profile, and Me, my father and my mother manage my
-grandmother's, with reminders ringing on one phone and a notification on all of them."
-Read it, make the five decisions at the end, and the build follows.
+**Status: P1 + P2 BUILT (2026-08-24); P3 send-side built, receive-side deferred; P4 not
+built.** This is the answer to "how can Me, my mother and my sisters all manage my mother's
+profile, and Me, my father and my mother manage my grandmother's, with reminders ringing on
+one phone and a notification on all of them." The five decisions at the end are now the
+LOCKED DECISIONS block; `docs/FAMILY-SHARING-CONTRACT.md` is the single source of truth for
+the built behaviour and `docs/SYNC-AND-BACKUP.md` §13–15 for the threat model + schema. See
+§7 for the per-phase shipped state.
 
 It is written against what exists today (`src/features/sync/`, `docs/SYNC-AND-BACKUP.md`),
 and it changes one thing the current design leans on hard, so that change is stated first.
@@ -187,17 +190,32 @@ This is the whole risk of turning viewers into writers, so it gets its own rules
 
 ## 7. Phased build — smallest shippable slice first
 
-1. **P1 — read-only multi-viewer, per profile.** Generalise today's single-viewer sharing to
-   the per-profile share id + membership approval. This ships the invite/approve/key-wrap
-   flow and the "family can *see* mother's record" value with zero conflict risk (still one
-   writer). Most of the plumbing exists.
-2. **P2 — multi-writer for non-reminder data.** Readings, symptoms, documents, notes become
-   writable by any member; LWW + union merge; the merge rule and the outbox conflict handling.
-   No alarm risk — none of this rings.
-3. **P3 — master + push.** Master designation, per-profile alarm ownership, Expo push fan-out.
-   This is where "rings on one, notifies all" lands.
-4. **P4 — reminder-affecting edits as proposals** (Decision A2). The last and most careful
-   slice: a member proposing a schedule change, the master confirming it.
+1. **P1 — read-only multi-viewer, per profile. BUILT.** Per-profile share id + membership
+   approval; the invite → join-request → owner-approve → per-device key-wrap flow
+   (`membership.ts`, `deviceKey.ts`, `keywrap.ts`, `sync_join_request` + `sync_key_wrap`).
+   *Known gap (flagged, not built): the fresh-from-scratch initial join where the invitee has
+   no local profile row yet — needs invitee-side pending-join persistence, an owner-side
+   initial full publish incl. the `profile` identity row, and a bootstrap pull. Rewrap
+   recovery for already-joined members and first-release-after-approval DO work
+   (`acceptProfileKeyWrap` wired into `appOpen.ts`).*
+2. **P2 — multi-writer for non-reminder data. BUILT.** Readings, symptoms, documents, notes
+   writable by members; `sync_row` multi-writer stream with ms-LWW enforced by the relay
+   trigger (`sync_row_lww`); union of `dose_event`; documents SYNC end-to-end. `merge.ts` +
+   `rowStream.ts` + `outbox.ts`. *Known gap: `canWriteNow` (manager online-only) is
+   client-side scaffolding, not yet wired to a read-only member-edit UI — see §13.*
+3. **P3 — owner rings + push. SEND-SIDE BUILT, RECEIVE-SIDE DEFERRED.** Owner-only ringing
+   (non-owner devices schedule nothing — `deviceHorizon.ts` `continue`s on non-owned
+   profiles); content-free Expo push fan-out send path (`push.ts::sendFamilyPing`, sibling
+   tokens sealed in `device:<id>` rows). **The receive path is a deliberate decision, NOT
+   built** — `expo-notifications` stays banned (a second scheduler double-fires a dose); the
+   recommended receive-only native FCM channel `family_ping_v1` is reserved in
+   `channels.js` but not implemented. `sendFamilyPing`/token-publish are not yet wired into
+   the owner's live alarm path.
+4. **P4 — reminder-affecting edits as proposals** (Decision A2). NOT BUILT. This round applies
+   the safe default (C2): a manager edit to a MEDICINE or SCHEDULE lands
+   `confirmed_by_user_at = NULL` on the owner device (author-blind gate in `rowStream.ts`) and
+   does not arm until the owner accepts it, reusing the existing confirmed-medicine DB
+   triggers. Full member-proposes / owner-confirms UI is the P4 slice.
 
 Each phase is independently useful and independently safe to ship.
 

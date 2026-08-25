@@ -11,16 +11,18 @@
     "check:i18n": "node ./scripts/check-i18n.js",
     "check:clinical": "node ./scripts/check-clinical-language.js",
     "gen:brand": "node ./scripts/generate-icons.js && python3 ./scripts/generate-wordmark.py",
-    "check:all": "npm run typecheck && npm run check:i18n && npm run check:clinical && npm run check:bundle",
+    "check:all": "npm run typecheck && npm run check:i18n && npm run check:clinical && npm run check:scheduler && npm run check:bundle",
     "test": "node --test --experimental-strip-types \"src/**/*.test.ts\"",
     "build:qa": "./scripts/build-android.sh qa apk",
     "build:prod": "./scripts/build-android.sh prod apk",
     "build:prod:aab": "./scripts/build-android.sh prod aab",
     "ios": "expo run:ios",
-    "check:bundle": "rm -rf /tmp/aarogya-bundle-check && npx expo export --platform android --output-dir /tmp/aarogya-bundle-check --no-minify >/dev/null && echo \"bundle OK\""
+    "check:bundle": "rm -rf /tmp/aarogya-bundle-check && npx expo export --platform android --output-dir /tmp/aarogya-bundle-check --no-minify >/dev/null && echo \"bundle OK\"",
+    "check:scheduler": "node ./scripts/check-no-local-scheduling.js"
   },
   "dependencies": {
     "@noble/ciphers": "^2.3.0",
+    "@noble/curves": "^2.3.0",
     "@noble/hashes": "^2.3.0",
     "@react-native-async-storage/async-storage": "2.2.0",
     "@react-navigation/bottom-tabs": "^7.18.16",

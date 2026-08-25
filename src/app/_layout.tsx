@@ -241,7 +241,38 @@ function Providers({ children }: { children: React.ReactNode }) {
   );
 }
 
+/**
+ * Pull family changes when the app comes BACK to the foreground, not only on a cold start.
+ *
+ * `src/app/index.tsx` syncs once at boot, but boot happens rarely: Android keeps this process
+ * alive for hours, so a phone that was opened this morning and is opened again this evening
+ * never re-runs it. On a shared profile that means looking at a record that a sister updated
+ * at the hospital and seeing this morning's version, with nothing on screen admitting it.
+ *
+ * Always mounted and deliberately NOT tied to the biometric lock — the AppState listener in
+ * `AppLock` above only runs when the lock is on, and sync has to work for everyone else too.
+ *
+ * `syncNow` shares the boot sync's in-flight guard, so a resume that races the cold-start sync
+ * is a no-op rather than a second publish. Fire-and-forget: this is the network, and the
+ * screen she is returning to must paint now, not after a slow relay answers.
+ */
+function useSyncOnForeground(): void {
+  useEffect(() => {
+    const onChange = (state: AppStateStatus) => {
+      if (state !== 'active') return;
+      void import('@/features/sync')
+        .then(({ syncNow }) => syncNow())
+        // Swallowed for the same reason boot swallows it: sharing failing is a visibility
+        // problem for the family, and the record on this phone is untouched either way.
+        .catch(() => {});
+    };
+    const subscription = AppState.addEventListener('change', onChange);
+    return () => subscription.remove();
+  }, []);
+}
+
 export default function RootLayout() {
+  useSyncOnForeground();
   return (
     <GestureHandlerRootView style={{ flex: 1 }}>
       <SafeAreaProvider>

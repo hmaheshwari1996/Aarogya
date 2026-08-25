@@ -43,6 +43,64 @@
 import type { AlarmException, AlarmHorizon, AlarmRule } from '../../types';
 
 /**
+ * The quiet dose channel. A rule on it does NOT ring: `Materializer.kt` decides ringing as
+ * `critical || channelId != dose_low_v1`, and the channel is IMPORTANCE_DEFAULT with
+ * `sound: null` and USAGE_NOTIFICATION (src/constants/channels.js). Kotlin tests this exact id
+ * (`Const.DOSE_LOW_CHANNEL_ID`), so it is a contract, not a preference.
+ */
+const QUIET_DOSE_CHANNEL_ID = 'dose_low_v1';
+
+/**
+ * The same doses, made silent — what a shared profile looks like on a phone that is NOT its
+ * owner.
+ *
+ * Every member device already holds the whole (encrypted) record, so it already knows when the
+ * doses are. It does not need to be TOLD at 8pm — it can schedule its own quiet reminder from
+ * data it synced hours ago. That works with NO NETWORK at dose time (a push does not), tells no
+ * third party that a reminder happened, needs no push token, and reuses the scheduler that is
+ * already proven rather than adding a second, weaker path.
+ *
+ * The owner's phone (the one with the patient) keeps its real alarm: the medicine's own channel,
+ * its criticality, its escalations. Every other member device gets the SAME occurrence at the
+ * SAME minute, downgraded here — no alarm sound even on silent, no full-screen intent, no
+ * looping player, and NO ESCALATIONS: re-pinging a relative in another city every fifteen
+ * minutes about a dose they cannot give is harassment, and it teaches them to swipe away the one
+ * that matters.
+ *
+ * `critical` is cleared as well as the channel, because `ringsAsAlarm` is
+ * `critical || channelId != dose_low_v1` — leaving `critical: true` would make a TB dose ring on
+ * all four phones despite the quiet channel. Both halves are required; neither alone is.
+ *
+ * Pure, so the property is provable without a database or a device.
+ */
+export function toQuietRules(rules: readonly AlarmRule[]): AlarmRule[] {
+  return rules.map((rule) => ({
+    ...rule,
+    channelId: QUIET_DOSE_CHANNEL_ID,
+    critical: false,
+    escalateAfterMin: [],
+  }));
+}
+
+/**
+ * ─── WHY A NON-OWNER DEVICE SCHEDULES NOTHING (not even a quiet reminder) ─────────────
+ * The owner's decision is LOCKED (docs/MULTI-DEVICE-SYNC-DESIGN.md, "Reminders"): the OWNER
+ * device rings, and "Managers and Viewers get push only, never a local alarm." Task constraint
+ * C3 restates it: "A non-owner device schedules NO alarms for a profile it is not owner of."
+ * `members.ts` and `owner.ts` say the same — `listOwnedProfileIds` is "the whole of" that rule.
+ *
+ * An earlier revision instead scheduled the member's copy on a QUIET channel ("it works with no
+ * network, needs no push token"). That is a genuinely reasonable design — but it is a DIFFERENT
+ * one, adopted only in this file while the doc, the task, and the sibling repos still said
+ * "schedules nothing". A quiet rule is still an alarm-layer entry expanded forever by
+ * `Materializer.kt` from possibly-stale synced data — a second scheduler on every relative's
+ * phone, which is exactly what "push only" closed. Reintroducing it is a doc change to make with
+ * the owner FIRST, not a reinterpretation to smuggle in through the horizon builder. So member
+ * profiles are dropped here; the member is told by push (`features/sync/push.ts::sendFamilyPing`)
+ * once the receive path is decided (task C1) — not by this device scheduling anything.
+ */
+
+/**
  * The horizon is now the whole device's, not one profile's, so its `profileId` field is no
  * longer a real profile id. It stays on the native-contract type (`AlarmHorizon`, unchanged)
  * as an informational marker; Kotlin does not key anything off it once the rules are a union.
@@ -103,10 +161,33 @@ export async function publishDeviceHorizon(now: number = Date.now()): Promise<bo
 
   const { listHorizonOverrides } = await import('../../db/repositories/occurrences');
   const { toLocalDate } = await import('../../lib/datetime');
+  const { listOwnedProfileIds } = await import('../../db/repositories/members');
+  const { getSyncConfig } = await import('../../features/sync/config');
   // Never move a ring in the past; the override only matters from today forward.
   const fromDate = toLocalDate(new Date(now));
 
-  const profiles = await listProfiles(); // non-archived only
+  // C3 — EXACTLY ONE PHONE RINGS, and the others are still told.
+  //
+  // The owned set is "not shared (owner_device_id IS NULL) OR owned by this device".
+  // Unconfigured sync = deviceId null = every profile owned = the exact pre-sharing behaviour
+  // (R1: the union over every non-archived profile).
+  //
+  // A profile owned by ANOTHER device — this phone is a manager or viewer of it — is NOT
+  // dropped. Dropping it was correct only while the design still had a PUSH channel to tell
+  // that phone instead; there is none. `expo-notifications` was removed and no receive path was
+  // ever built, so "members get push only" now resolves to members getting NOTHING: a daughter
+  // who accepted an invite would see the record and never be reminded of a single dose, with
+  // nothing on screen admitting it.
+  //
+  // So those rules go through `toQuietRules` instead: the same dose, at the same minute, on the
+  // quiet channel with no escalations. It needs no push service, no token, and no network AT
+  // DOSE TIME — the phone already synced the schedule and can remind itself from data it has
+  // held for hours, which a push cannot do when the signal is gone. See `toQuietRules` for why
+  // BOTH the channel and the `critical` flag have to be cleared for it to stay silent.
+  const config = await getSyncConfig().catch(() => null);
+  const owned = await listOwnedProfileIds(config?.deviceId ?? null);
+
+  const profiles = await listProfiles(); // every non-archived profile; ownership decides LOUD vs QUIET
   const perProfileRules: AlarmRule[][] = [];
   const exceptions: AlarmException[] = [];
   for (const profile of profiles) {
@@ -114,7 +195,9 @@ export async function publishDeviceHorizon(now: number = Date.now()): Promise<bo
     const schedulesByThread = await getCurrentSchedulesForThreads(
       medicines.map((m) => m.threadId),
     );
-    perProfileRules.push(buildAlarmRules(medicines, schedulesByThread));
+    const rules = buildAlarmRules(medicines, schedulesByThread);
+    // The owner's phone rings; every other member device schedules the same dose quietly.
+    perProfileRules.push(owned.has(profile.id) ? rules : toQuietRules(rules));
     exceptions.push(...(await listHorizonOverrides(profile.id, fromDate)));
   }
 

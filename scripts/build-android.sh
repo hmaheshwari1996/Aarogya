@@ -152,6 +152,38 @@ echo "▸ ANDROID_HOME : $ANDROID_HOME"
 # for a dev-client and catastrophic for a release, so the release path checks
 # here, before spending five minutes on a Gradle build it is going to reject.
 MISSING_KEYS=""
+# ── The family-sharing backend, injected at build time ────────────────────────
+# app.config.ts bakes these into `extra.supabaseUrl` / `extra.supabaseAnonKey` so no user
+# is ever asked to paste a URL and a key. They are sourced HERE rather than committed, so
+# the repository carries no backend credentials even though the APK necessarily does.
+#
+# The publishable (anon) key is designed to live in clients: every table is row-level
+# secured and filters on an X-Share-Id header, the relay stores only ciphertext, and the
+# profile key never leaves a member device. The DATABASE PASSWORD is a real secret, is not
+# read here, and never reaches a device.
+#
+# A build without them SUCCEEDS and simply ships with sharing unconfigured — failing would
+# make an unrelated local build impossible — but it warns, because shipping that APK to the
+# family silently disables the feature they were promised.
+if [ -f "$HOME/.aarogya/supabase.env" ]; then
+  # shellcheck disable=SC1091
+  set -a; . "$HOME/.aarogya/supabase.env"; set +a
+  export AAROGYA_SUPABASE_URL="${SUPABASE_URL:-}"
+  export AAROGYA_SUPABASE_ANON_KEY="${SUPABASE_PUBLISHABLE_KEY:-}"
+fi
+
+if [ -n "${AAROGYA_SUPABASE_URL:-}" ] && [ -n "${AAROGYA_SUPABASE_ANON_KEY:-}" ]; then
+  echo "▸ sharing      : baked in ($AAROGYA_SUPABASE_URL)"
+else
+  echo ""
+  echo "WARNING: no family-sharing backend baked into this build."
+  echo "         AAROGYA_SUPABASE_URL / AAROGYA_SUPABASE_ANON_KEY are unset and"
+  echo "         ~/.aarogya/supabase.env was not found."
+  echo "         The APK will work, but family sharing will be unconfigured on every"
+  echo "         phone that installs it."
+  echo ""
+fi
+
 for key in AAROGYA_KEYSTORE_PATH AAROGYA_KEYSTORE_PASSWORD AAROGYA_KEY_ALIAS AAROGYA_KEY_PASSWORD; do
   if [ -z "$(eval "printf '%s' \"\${$key:-}\"")" ]; then
     MISSING_KEYS="$MISSING_KEYS $key"

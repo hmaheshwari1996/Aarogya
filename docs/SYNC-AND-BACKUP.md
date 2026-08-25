@@ -442,6 +442,36 @@ who was sent the old link loses it, so the new one has to be sent to all of them
 **What is deliberately not protected:** anyone holding the patient's unlocked phone. That
 is out of scope for cryptography and is what the app-lock is for.
 
+**The v2 family-sharing model (`sync_row`, roles, per-device key wrap) inherits the same
+relay-trust boundary, and it must be stated plainly rather than implied by the role names.**
+
+- **The relay enforces link-isolation only.** RLS filters every table on `link_id =
+  request_share_id()` — a pure check on the shared `X-Share-Id` header, no per-device auth
+  (the anon key is shared by design, the blind-postbox decision). So **Viewer read-only** and
+  **Manager online-only** are honoured by cooperating clients, not by Supabase: any holder of
+  the share id + anon key (every member, a Viewer included) *can* POST or DELETE this share's
+  ciphertext rows via raw PostgREST. Confidentiality is real (it comes from the encryption);
+  role *restriction* is a client-side contract.
+- **Removing a member rotates the key, which revokes future READS, not relay ACCESS.** The
+  removed device's old-generation key opens nothing written after the rotation — that is the
+  guarantee. It does **not** lose the share id or anon key, so it retains the ability to write
+  or delete this share's rows (a nuisance the owner's local DB republishes over, never a loss
+  of the owner's own record). The UI must say "can no longer see changes," never "can no
+  longer touch the data." Making roles/removal relay-enforced needs per-device Supabase auth
+  or reader-verified writer signatures — a later round.
+- **Authorship (`device_id`) is self-asserted.** Because the profile key is held by every
+  member, a key-holder can seal a row stamping any `device_id` (the AAD binds it but cannot
+  stop a holder *choosing* it). The owner's ring gate therefore trusts NO inbound
+  confirmation stamp — any inbound medicine/schedule lands unconfirmed on the owner device
+  (see `rowStream.ts`). Clinical attribution shown in the app is trusted-key-holder, not
+  cryptographic, until per-writer signatures land.
+- **`row_key = '<table>:<uuid>'` travels in the clear** (a reader must know which local table
+  a decrypted payload belongs to). So the operator learns the *categories* present and their
+  per-category row counts and cadence — how many `lab_result`/`symptom_event` rows, the tempo
+  of the `dose_event` stream — without decrypting anything. Payload *lengths* are padded (§14)
+  but the table prefix is not hidden; this is known, accepted metadata. Hiding it would mean
+  addressing rows by an opaque per-share code instead of the table name.
+
 ### 14. Keys, and what the server stores
 
 ```

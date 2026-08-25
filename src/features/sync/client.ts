@@ -34,6 +34,12 @@ import { ensureShareKey, getShareKey } from './crypto';
 export const REMOTE_TABLES = {
   record: 'sync_record',
   share: 'sync_share',
+  // v2 family sharing (supabase/schema.sql "-- v2" section). The `row` stream is the
+  // multi-writer sibling of `record`; `join_request` and `key_wrap` carry the invite
+  // handshake. Every one is RLS-scoped on X-Share-Id exactly like `record`.
+  row: 'sync_row',
+  joinRequest: 'sync_join_request',
+  keyWrap: 'sync_key_wrap',
 } as const;
 
 /** Long enough for a corridor connection, short enough not to hold a drain open forever. */
@@ -74,6 +80,47 @@ export type RemoteShare = {
   readonly payload: string;
   readonly key_generation: number;
   readonly updated_at_epoch: number;
+};
+
+/**
+ * One row of the v2 multi-writer stream as the relay stores it (`sync_row`).
+ *
+ * Everything here except `payload` is CLEAR TEXT the relay orders on, and every one of those
+ * columns is bound into the ciphertext's AAD (`rowAad`) so the relay cannot rearrange them.
+ * `written_at_epoch` is the relay's OWN arrival clock (a `clock_timestamp()` the trigger
+ * stamps); it is the pull cursor, never sent by a client. `modified_at_ms` is the writing
+ * device's local edit time — the LWW key.
+ */
+export type RemoteRow = {
+  readonly link_id: string;
+  readonly row_key: string;
+  readonly device_id: string;
+  readonly modified_at_ms: number;
+  readonly op: 'upsert' | 'delete';
+  readonly payload: string;
+  readonly key_generation: number;
+  readonly written_at_epoch: number;
+};
+
+/** A pending request to join a share: a public key the relay cannot use, a sealed label it cannot read. */
+export type RemoteJoinRequest = {
+  readonly link_id: string;
+  readonly device_id: string;
+  /** base64 X25519 public key of the joining device — public, safe. */
+  readonly device_pubkey: string;
+  /** base64 sealed-box of the device label to the OWNER's public key. */
+  readonly label_wrap: string;
+  readonly requested_at_epoch: number;
+};
+
+/** A wrapped profile key, openable only by one device's private key, at one generation. */
+export type RemoteKeyWrap = {
+  readonly link_id: string;
+  readonly device_id: string;
+  readonly key_generation: number;
+  /** base64: ephPub ‖ nonce ‖ ciphertext ‖ tag. */
+  readonly wrap: string;
+  readonly wrapped_at_epoch: number;
 };
 
 export type SyncClient = {

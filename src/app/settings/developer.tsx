@@ -24,7 +24,7 @@
  * ─────────────────────────────────────────────────────────────────────────────
  */
 
-import React, { useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import { View } from 'react-native';
 import { router } from 'expo-router';
 
@@ -34,6 +34,7 @@ import {
   Card,
   Divider,
   ListRow,
+  useToast,
   ROW_DIVIDER_INSET,
   Screen,
   ScreenHeader,
@@ -46,6 +47,19 @@ import type { TranslateFn } from '@/i18n';
 
 const STRINGS: LocalStrings = {
   'dev.title': { en: 'Developer Options', hi: 'डेवलपर विकल्प' },
+  'dev.syncSection': { en: 'Family sharing', hi: 'परिवार के साथ साझा' },
+  'dev.syncNow': { en: 'Sync Now', hi: 'अभी सिंक कीजिए' },
+  'dev.syncNowHelp': {
+    en: 'Send this phone’s changes and fetch everyone else’s straight away.',
+    hi: 'इस फ़ोन के बदलाव भेजिए और बाकी सबके अभी ले आइए।',
+  },
+  'dev.syncRunning': { en: 'Syncing…', hi: 'सिंक हो रहा है…' },
+  'dev.syncDone': { en: 'Sync finished', hi: 'सिंक पूरा हुआ' },
+  'dev.syncBusy': { en: 'A sync is already running', hi: 'सिंक पहले से चल रहा है' },
+  'dev.syncFailed': {
+    en: 'Sync did not finish. Nothing on this phone has changed.',
+    hi: 'सिंक पूरा नहीं हुआ। इस फ़ोन में कुछ नहीं बदला।',
+  },
   'dev.subtitle': {
     en: 'Technical notes about the app itself',
     hi: 'ऐप के अपने काम-काज के तकनीकी नोट',
@@ -88,6 +102,8 @@ const STRINGS: LocalStrings = {
 };
 
 export default function DeveloperScreen() {
+  const toast = useToast();
+  const [syncing, setSyncing] = useState(false);
   const t = useT(STRINGS);
 
   // The same live snapshot the log screen uses, for the same reason: the count on this
@@ -102,6 +118,27 @@ export default function DeveloperScreen() {
     stats.count === 0
       ? t('dev.logsEmpty')
       : t('dev.logsCount', { count: stats.count, size: sizeText(t, stats.approxBytes) });
+
+  /**
+   * A manual sync, behind the developer toggle on purpose: the app syncs on its own at boot
+   * and on every foreground, so a button here is a debugging aid for whoever set the phone up
+   * — not a thing the patient should ever feel she has to remember to press.
+   */
+  const runSync = useCallback(async () => {
+    setSyncing(true);
+    try {
+      const { syncNow } = await import('@/features/sync');
+      const ran = await syncNow();
+      toast.show({
+        message: ran ? t('dev.syncDone') : t('dev.syncBusy'),
+        variant: ran ? 'success' : 'info',
+      });
+    } catch {
+      toast.show({ message: t('dev.syncFailed'), variant: 'error' });
+    } finally {
+      setSyncing(false);
+    }
+  }, [t, toast]);
 
   return (
     <Screen variant="scroll" background="bgSunken">
@@ -121,6 +158,16 @@ export default function DeveloperScreen() {
             onAction={() => router.back()}
           />
         ) : null}
+
+        <SectionHeader title={t('dev.syncSection')} />
+        <Card>
+          <ListRow
+            title={syncing ? t('dev.syncRunning') : t('dev.syncNow')}
+            subtitle={t('dev.syncNowHelp')}
+            disabled={syncing}
+            onPress={() => void runSync()}
+          />
+        </Card>
 
         <SectionHeader title={t('dev.logsSection')} />
         <Card>

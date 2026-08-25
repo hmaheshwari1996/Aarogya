@@ -29,6 +29,13 @@ import { newId } from '../../lib/ids';
 import Constants from 'expo-constants';
 
 import { setShareHost } from './link';
+import { canWriteNow, normaliseRole, type SyncRole } from './merge';
+
+// The role type and its pure predicates (capabilities, the online write-gate, the legacy
+// `'patient' → 'owner'` map) live in `./merge`, which loads under `node --test`; this file
+// cannot (it reaches expo-constants and the db). Re-exported so the rest of the app keeps
+// importing `SyncRole`/`canWriteNow` from the sync barrel, unaware of the split.
+export { canWriteNow, type SyncRole };
 
 /**
  * The one place `extra.inviteHost` is read at runtime.
@@ -57,14 +64,37 @@ setShareHost(
     : null,
 );
 
+/**
+ * The backend baked into the build (`app.config.ts` → `extra.supabaseUrl/supabaseAnonKey`).
+ *
+ * Every install ships pointing at the same relay, so nobody is asked to paste a URL and a key.
+ * A stored value still WINS over these — Settings can point a build at a different backend —
+ * but the common path needs no setup at all, which is the difference between a feature the
+ * family uses and one nobody turns on.
+ *
+ * Empty when a build was made without the credentials in the environment. That is not an
+ * error: it simply means sharing is unconfigured, exactly as it was before this existed.
+ */
+const BAKED_URL =
+  typeof Constants.expoConfig?.extra?.supabaseUrl === 'string'
+    ? (Constants.expoConfig.extra.supabaseUrl as string)
+    : '';
+const BAKED_ANON_KEY =
+  typeof Constants.expoConfig?.extra?.supabaseAnonKey === 'string'
+    ? (Constants.expoConfig.extra.supabaseAnonKey as string)
+    : '';
+
+/** True when this build can reach a relay without anyone configuring anything. */
+export function hasBakedBackend(): boolean {
+  return normaliseUrl(BAKED_URL) !== null && BAKED_ANON_KEY.trim().length > 0;
+}
+
 const KEY_URL = 'sync.supabaseUrl';
 const KEY_ANON = 'sync.anonKey';
 const KEY_ENABLED = 'sync.enabled';
 const KEY_DEVICE_ID = 'sync.deviceId';
 const KEY_DEVICE_LABEL = 'sync.deviceLabel';
 const KEY_ROLE = 'sync.role';
-
-export type SyncRole = 'patient' | 'viewer';
 
 export type SyncConfig = {
   /** Project URL, no trailing slash, https only. */
@@ -89,14 +119,21 @@ export async function getSyncConfig(): Promise<SyncConfig | null> {
     const enabled = await readMeta(KEY_ENABLED);
     if (enabled !== '1') return null;
 
-    const url = normaliseUrl(await readMeta(KEY_URL));
-    const anonKey = (await readMeta(KEY_ANON))?.trim() ?? '';
+    // A pasted value wins; otherwise the build's baked-in backend. The override exists so a
+    // build can be pointed at a different relay without a rebuild — it is not the normal path.
+    const url = normaliseUrl(await readMeta(KEY_URL)) ?? normaliseUrl(BAKED_URL);
+    const stored = (await readMeta(KEY_ANON))?.trim() ?? '';
+    const anonKey = stored.length > 0 ? stored : BAKED_ANON_KEY.trim();
     if (!url || anonKey.length === 0) return null;
 
     const deviceId = (await readMeta(KEY_DEVICE_ID))?.trim() ?? '';
     if (deviceId.length === 0) return null;
 
-    const role = (await readMeta(KEY_ROLE)) === 'viewer' ? 'viewer' : 'patient';
+    // `normaliseRole` maps the legacy `'patient'` an existing owner phone stored to `'owner'`,
+    // reads `'manager'`/`'viewer'` as themselves, and fails CLOSED (viewer) on a blank or a
+    // value from a newer build — a corrupted role can only ever REMOVE ability, never grant a
+    // silent owner. Both real setup flows write an explicit role, so this only bites corruption.
+    const role = normaliseRole(await readMeta(KEY_ROLE));
     const deviceLabel = (await readMeta(KEY_DEVICE_LABEL))?.trim() ?? 'this phone';
 
     return { url, anonKey, deviceId, deviceLabel, role };

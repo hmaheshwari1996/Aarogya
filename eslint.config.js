@@ -19,10 +19,16 @@
  *     asked for 21sp, and the bypass is completely invisible in review.
  *
  *  4. `expo-notifications` — the local `modules/med-alarm` module is the only
- *     scheduler. expo-notifications' Android scheduling goes through
+ *     SCHEDULER. expo-notifications' Android scheduling goes through
  *     AlarmManager without the exact-alarm and boot-restore handling this app
  *     needs, so a second scheduler means doses fire twice or not at all, and
  *     both failures look like "the reminder is unreliable".
+ *
+ *     There is NO exemption. A shared profile notifies a non-owner phone by
+ *     scheduling the same dose QUIETLY through med-alarm (deviceHorizon.ts's
+ *     `toQuietRules` maps it onto `dose_low_v1`), which needs no push service, no
+ *     token, and works with no network at dose time. Nothing in this app may
+ *     import expo-notifications.
  *
  * Each rule is scoped to the directories where it is actually load-bearing, so
  * the theme itself, the config plugins and the scripts are not fighting it.

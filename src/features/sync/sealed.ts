@@ -30,7 +30,7 @@
 
 import { xchacha20poly1305 } from '@noble/ciphers/chacha.js';
 
-import { bytesToUtf8, concatBytes, readU32, u32, utf8Bytes } from '../backup/bytes';
+import { bytesToUtf8, concatBytes, readU32, u32, u64, utf8Bytes } from '../backup/bytes';
 
 /** The size of the key that opens a shared record. */
 export const SHARE_KEY_BYTES = 32;
@@ -101,6 +101,30 @@ const AAD_RECORD = utf8Bytes('aarogya.sync.record.v1');
  */
 export function recordAad(rowKey: string, lamport: number): Uint8Array {
   return concatBytes(AAD_RECORD, utf8Bytes(rowKey), u32(lamport));
+}
+
+const AAD_ROW = utf8Bytes('aarogya.sync.row.v1');
+
+/**
+ * Associated data for a v2 multi-writer stream row (`sync_row`).
+ *
+ * DISTINCT from `recordAad` on purpose — do NOT collapse the two. The baseline `sync_record`
+ * stream still binds `recordAad` (row_key ‖ lamport); the v2 `sync_row` stream binds the four
+ * columns the relay stores in the clear and orders on: the row key, the millisecond LWW key,
+ * the writing device, and the key generation. Binding all four means the relay cannot move a
+ * payload onto another row, replay an older edit under a newer millisecond, swap its device_id
+ * to win a tie, or claim a different generation — every one of those clear-text columns is now
+ * authenticated by the tag.
+ *
+ * `modifiedAtMs` is a millisecond epoch and overruns u32, so it rides as u64.
+ */
+export function rowAad(
+  rowKey: string,
+  modifiedAtMs: number,
+  deviceId: string,
+  keyGeneration: number,
+): Uint8Array {
+  return concatBytes(AAD_ROW, utf8Bytes(rowKey), u64(modifiedAtMs), utf8Bytes(deviceId), u32(keyGeneration));
 }
 
 const AAD_SNAPSHOT = utf8Bytes('aarogya.sync.snapshot.v1');

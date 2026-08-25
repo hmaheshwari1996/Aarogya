@@ -142,6 +142,28 @@ const CHANNELS = [
     visibility: VISIBILITY.PUBLIC,
     lightColor: '#EF6C00',
   },
+  {
+    // RESERVED for the family-ping RECEIVE path (features/sync/push.ts §5.3, flag F5). A
+    // manager/viewer device shows a DISPLAY-ONLY heads-up here when the owner pings it that
+    // something changed — it NEVER rings and NEVER schedules a dose. That is why it is
+    // USAGE_NOTIFICATION (not USAGE_ALARM → no STREAM_ALARM, no sound-through-silent) and
+    // DEFAULT importance (not HIGH): it is a quiet nudge, the OPPOSITE of a dose alarm. The
+    // receive handler is NOT built this round (`expo-notifications` stays banned — a second
+    // scheduler double-fires a dose); when a narrow native receive-only FCM path is added, THIS
+    // id is its target. Reserving it now means the native side has somewhere to post to, with no
+    // behaviour attached until the handler exists.
+    id: 'family_ping_v1',
+    name: 'Family updates',
+    description: 'Quiet updates when someone in the family changes shared records. Never an alarm.',
+    importance: IMPORTANCE.DEFAULT,
+    sound: null,
+    usage: USAGE_NOTIFICATION,
+    contentType: CONTENT_TYPE_SONIFICATION,
+    bypassDnd: false,
+    vibration: [0, 150],
+    visibility: VISIBILITY.PRIVATE,
+    lightColor: '#00695C',
+  },
 ];
 
 /**

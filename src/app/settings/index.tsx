@@ -129,6 +129,16 @@ const STRINGS: LocalStrings = {
     hi: 'सिर्फ़ वे अंक जो डॉक्टर ने दिए हैं',
   },
   'settings.security': { en: 'Lock the app', hi: 'ऐप पर ताला' },
+  'settings.lastSync': { en: 'Last updated from family', hi: 'परिवार से आख़िरी बार लिया' },
+  'settings.lastSyncNever': {
+    en: 'Not sharing with anyone yet',
+    hi: 'अभी किसी के साथ साझा नहीं',
+  },
+  'settings.lastSyncPending': {
+    en: 'Sharing is on, but nothing has come through yet',
+    hi: 'साझा चालू है, पर अभी कुछ नहीं आया',
+  },
+  'settings.lastSyncAt': { en: 'Last updated {{when}}', hi: 'आख़िरी बार {{when}} लिया' },
   'settings.securityHelp': {
     en: 'Ask for a fingerprint before opening',
     hi: 'खोलने से पहले फिंगरप्रिंट माँगें',
@@ -275,6 +285,20 @@ export default function SettingsScreen() {
    * it is wired at boot, a scan started before Settings was ever opened records nothing —
    * which is the fail-closed direction, and is reported rather than worked around here.
    */
+  // Shown to EVERYONE, not just behind the developer toggle: on a shared profile "is what I
+  // am looking at current?" is the family member's question, and a silently stale record is
+  // exactly what they cannot otherwise detect.
+  const lastSync = useAsync(async () => {
+    const [{ getLastSyncAt }, { listSharedProfiles }] = await Promise.all([
+      import('@/db/repositories/settings'),
+      import('@/db/repositories/members'),
+    ]);
+    const shared = await listSharedProfiles();
+    return { sharing: shared.length > 0, at: await getLastSyncAt() };
+  }, []);
+  const { reload: reloadLastSync } = lastSync;
+  useReloadOnFocus(reloadLastSync);
+
   const devLog = useAsync(async () => {
     await initDevLog();
     return isDevLogEnabled();
@@ -443,6 +467,19 @@ export default function SettingsScreen() {
 
         <SectionHeader title={t('settings.sectionSafety')} />
         <Card>
+          <ListRow
+            title={t('settings.lastSync')}
+            subtitle={
+              !lastSync.data?.sharing
+                ? t('settings.lastSyncNever')
+                : lastSync.data.at === null
+                  ? t('settings.lastSyncPending')
+                  : t('settings.lastSyncAt', {
+                      when: new Date(lastSync.data.at).toLocaleString(),
+                    })
+            }
+          />
+          <Divider inset={ROW_DIVIDER_INSET} />
           <ListRow
             title={t('settings.viewers')}
             subtitle={t('settings.viewersHelp')}

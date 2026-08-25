@@ -41,10 +41,21 @@
  * start-up.
  */
 
+import * as Crypto from 'expo-crypto';
+
 import { inTransaction, queryAll, TABLES, assertIdentifier, type TableName } from '../../db/repositories/_shared';
-import { createClient, REMOTE_TABLES, type SyncClient } from './client';
+import { clientFor, createClient, REMOTE_TABLES, type SyncClient } from './client';
+import { getSyncConfig } from './config';
 import { getShareKey, sealRecordPayload } from './crypto';
+import { normaliseRole, type SyncRole } from './merge';
+import { getProfileKey } from './profileKey';
 import { stripLocalPaths } from './redact';
+import { buildRowUpsert, sealRowPayload, stripForRowStream } from './rowStream';
+import {
+  getMember,
+  getProfileShare,
+  type ProfileShare,
+} from '../../db/repositories/members';
 
 /**
  * Rows per push.
@@ -285,6 +296,188 @@ async function republish(): Promise<number> {
   }
 
   return published;
+}
+
+// ══ v2: the multi-writer publish, per family-shared profile ═══════════════════════
+//
+// The legacy `drainOutbox` above seals ONE device's rows under ONE global share key and pushes
+// them to `sync_record`. v2 is per-PROFILE: a device can be owner of mother's profile and a
+// manager of grandmother's, each a separate dataset under a separate key. So this drains the
+// SAME outbox but routes every row to its profile's `sync_row` stream, sealed under that
+// profile's key, carrying `device_id` + `modified_at_ms` for the relay's LWW.
+//
+// A device is EITHER legacy or v2 in practice: setting up family sharing mints no global share
+// key, so `drainOutbox` no-ops (`no_key`) and only this runs; a legacy device has no share_id on
+// any profile, so this finds nothing. PUBLISH BEFORE PULL (see appOpen) is what makes the
+// puller-side LWW in rowStream safe — our edits reach the relay before we apply anyone's.
+
+export type SharedPublishOutcome = {
+  readonly published: number;
+  readonly failed: number;
+  readonly profiles: number;
+  readonly skipped: 'not_configured' | 'offline' | null;
+};
+
+/**
+ * Drain the outbox into every family-shared profile this device may write to.
+ *
+ * Owner always publishes; an active manager publishes (its rows only exist because it was online
+ * when it wrote — the §3.3 gate lives at the write site, not here); a viewer never has rows.
+ * NEVER THROWS — it is a background pass, and the local database is the source of truth.
+ */
+export async function publishSharedProfiles(now: number = Date.now()): Promise<SharedPublishOutcome> {
+  const config = await getSyncConfig();
+  if (!config) return { published: 0, failed: 0, profiles: 0, skipped: 'not_configured' };
+  const thisDeviceId = config.deviceId;
+
+  let pending: OutboxRow[];
+  try {
+    pending = await queryAll<OutboxRow>(
+      `SELECT id, table_name, row_id, op, lamport, attempts, created_at_epoch
+         FROM sync_outbox WHERE attempts < ? ORDER BY lamport ASC LIMIT ?;`,
+      [MAX_ATTEMPTS, BATCH_SIZE],
+    );
+  } catch {
+    return { published: 0, failed: 0, profiles: 0, skipped: null };
+  }
+  const due = pending.filter((row) => isDue(row, now));
+  if (due.length === 0) return { published: 0, failed: 0, profiles: 0, skipped: null };
+
+  // Route each outbox row to its profile via the local row's profile_id (the soft-deleted row
+  // still exists for a tombstone). Rows we cannot route — no profile_id column, or a hard-gone
+  // row — are left in the queue for the legacy path or a later pass.
+  type ProfileBatch = { rows: OutboxRow[]; locals: Map<string, Record<string, unknown>> };
+  const byProfile = new Map<string, ProfileBatch>();
+  for (const row of due) {
+    const local = await readLocalRow(row.table_name, row.row_id);
+    const profileId = pickProfileId(row.table_name, row.row_id, local);
+    if (!profileId) continue;
+    const entry: ProfileBatch = byProfile.get(profileId) ?? { rows: [], locals: new Map() };
+    entry.rows.push(row);
+    if (local) entry.locals.set(row.id, local);
+    byProfile.set(profileId, entry);
+  }
+  if (byProfile.size === 0) return { published: 0, failed: 0, profiles: 0, skipped: null };
+
+  let published = 0;
+  let failed = 0;
+  let profiles = 0;
+  let sawOffline = false;
+
+  for (const [profileId, entry] of byProfile) {
+    const target = await resolveWritableShare(profileId, thisDeviceId);
+    if (!target) continue; // not family-shared, or this device is a viewer / not a member
+    profiles += 1;
+
+    const payloads: Record<string, unknown>[] = [];
+    const sentOutboxIds: string[] = [];
+    for (const row of entry.rows) {
+      const built = buildSharedRow(row, entry.locals.get(row.id) ?? null, target, thisDeviceId, now);
+      if (!built) continue;
+      payloads.push(built);
+      sentOutboxIds.push(row.id);
+    }
+    if (payloads.length === 0) continue;
+
+    const client = clientFor(config, target.share.shareId!);
+    const response = await client.upsert(REMOTE_TABLES.row, payloads, 'link_id,row_key');
+    if (response.ok) {
+      await forget(sentOutboxIds);
+      published += sentOutboxIds.length;
+    } else {
+      failed += sentOutboxIds.length;
+      if (response.error.kind === 'offline') sawOffline = true;
+    }
+  }
+
+  return { published, failed, profiles, skipped: sawOffline ? 'offline' : null };
+}
+
+type WritableShare = { share: ProfileShare; role: SyncRole; key: Uint8Array; generation: number };
+
+/** The share id + key + role for a profile this device is allowed to publish to, or null. */
+async function resolveWritableShare(profileId: string, thisDeviceId: string): Promise<WritableShare | null> {
+  const share = await getProfileShare(profileId);
+  if (!share || !share.shareId) return null;
+
+  const role: SyncRole =
+    share.ownerDeviceId === thisDeviceId
+      ? 'owner'
+      : normaliseRole((await getMember(share.shareId, thisDeviceId))?.role ?? null);
+  if (role === 'viewer') return null; // a viewer never publishes (F3: trusted, not enforced by the relay)
+
+  const key = await getProfileKey(share.shareId);
+  if (!key) return null; // owner without its own key, or a member not yet accepted — nothing to seal with
+  return { share, role, key: key.key, generation: key.generation };
+}
+
+/** Seal one outbox row into a `sync_row` upsert under the profile key. */
+function buildSharedRow(
+  row: OutboxRow,
+  local: Record<string, unknown> | null,
+  target: WritableShare,
+  thisDeviceId: string,
+  now: number,
+): Record<string, unknown> | null {
+  const rowKey = `${row.table_name}:${row.row_id}`;
+  // A queued upsert on a table the registry turned off must not travel (mirrors buildPayload).
+  if (row.op === 'upsert' && isKnownTable(row.table_name) && !TABLES[row.table_name].sync) return null;
+
+  const modifiedAtMs = rowModifiedMs(local, now);
+  const value =
+    row.op === 'delete'
+      ? { op: 'delete' as const, table: row.table_name, id: row.row_id }
+      : local
+        ? { op: 'upsert' as const, table: row.table_name, row: stripForRowStream(row.table_name, local) }
+        : null;
+  if (!value) return null; // an upsert whose local row has vanished cannot be sent
+
+  let payload: string;
+  try {
+    payload = sealRowPayload(
+      rowKey,
+      row.op,
+      modifiedAtMs,
+      thisDeviceId,
+      target.generation,
+      value,
+      target.key,
+      (count) => Crypto.getRandomBytes(count),
+    );
+  } catch (error) {
+    // One oversized row (a long extraction blob past the largest padding bucket) must not cost
+    // the whole profile's batch. Drop it here; the local db is still the truth.
+    console.warn(`[sync] ${rowKey} could not be sealed for the row stream`, error);
+    return null;
+  }
+  return buildRowUpsert({
+    linkId: target.share.shareId!,
+    rowKey,
+    deviceId: thisDeviceId,
+    modifiedAtMs,
+    op: row.op,
+    payload,
+    keyGeneration: target.generation,
+  });
+}
+
+/** The row's local edit time, the LWW key. Falls back through the stamps a table actually has. */
+function rowModifiedMs(local: Record<string, unknown> | null, now: number): number {
+  if (!local) return now;
+  for (const column of ['updated_at_epoch', 'at_epoch', 'created_at_epoch']) {
+    const value = local[column];
+    if (typeof value === 'number' && Number.isFinite(value)) return value;
+  }
+  return now;
+}
+
+/** The profile a row belongs to: its own `profile_id`, or the row id itself for profile-keyed tables. */
+function pickProfileId(table: string, rowId: string, local: Record<string, unknown> | null): string | null {
+  if (local && typeof local['profile_id'] === 'string') return local['profile_id'];
+  // emergency_card / profile_condition / profile_metric / streak_state key ON profile_id, so the
+  // row id IS the profile id even when the column is not selected under that name.
+  if (isKnownTable(table) && TABLES[table].pk === 'profile_id') return rowId;
+  return null;
 }
 
 // ── internals ────────────────────────────────────────────────────────────────

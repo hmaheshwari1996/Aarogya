@@ -14,6 +14,11 @@
  *     both halves and deletes the old dataset. `./link.ts` and `./share.ts`.
  *  3. Every background path no-ops silently when sharing is not configured, because L1 and
  *     L2 ship long before any of this. `./config.ts`.
+ *
+ * v2 (family sharing) adds a fourth, which supersedes the single-writer assumption above for
+ * the `sync_row` stream ONLY: every MEMBER device writes one profile, merged by
+ * last-write-wins on a millisecond modified-time (`./merge`, `./rowStream`). The legacy
+ * `sync_record`/`sync_share` single-viewer path is unchanged.
  */
 
 export {
@@ -57,12 +62,76 @@ export {
   drainOutbox,
   drainOutboxFully,
   outboxDepth,
+  publishSharedProfiles,
   republishRecords,
   BATCH_SIZE,
   BACKOFF_MS,
   MAX_ATTEMPTS,
   type DrainOutcome,
+  type SharedPublishOutcome,
 } from './outbox';
+
+// ── v2 family sharing ────────────────────────────────────────────────────────
+
+export {
+  canWriteNow,
+  isReminderTable,
+  mergeStrategyFor,
+  normaliseRole,
+  roleCapabilities,
+  rowIsNewer,
+  type MergeStrategy,
+  type RoleCapabilities,
+  type RowStamp,
+} from './merge';
+
+export {
+  approve,
+  changeRole,
+  deny,
+  getShareView,
+  listPendingRequests,
+  mintInvite,
+  postJoinRequest,
+  removeMember,
+  type Invite,
+  type JoinRequestOutcome,
+  type JoinRequestView,
+  type MemberView,
+  type PendingRequest,
+  type ShareView,
+} from './membership';
+
+export { acknowledgeOwnership, applyOwnerRow, changeOwner, type OwnerRow } from './owner';
+
+export {
+  gatherPushTargets,
+  publishDeviceToken,
+  sendFamilyPing,
+  type FamilyPing,
+  type PingResult,
+  type PushTarget,
+} from './push';
+
+export {
+  applyPulledRow,
+  buildRowUpsert,
+  pullAndApplyShare,
+  pullRows,
+  sealRowPayload,
+  type ApplyContext,
+  type ApplyOutcome,
+  type PulledRow,
+} from './rowStream';
+
+export {
+  forgetDeviceKeyPair,
+  getDevicePublicKeyB64,
+  getOrCreateDeviceKeyPair,
+  type DeviceKeyPair,
+} from './deviceKey';
+
+export { forgetProfileKey, getProfileKey, type ProfileKeyState } from './profileKey';
 
 export {
   checkDoseSilence,
@@ -122,4 +191,4 @@ export {
   type RandomSource,
 } from './sealed';
 
-export { syncOnAppOpen } from './appOpen';
+export { syncOnAppOpen, syncNow } from './appOpen';

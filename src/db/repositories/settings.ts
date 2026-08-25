@@ -41,6 +41,18 @@ export const META_ACTIVE_PROFILE_ID = 'active_profile_id';
  * Null means "not chosen yet" — the first-run language picker keys off that.
  */
 export const META_LANGUAGE_PREF = 'language_pref';
+
+/**
+ * When family sharing last completed a pull, epoch ms. Absent until the first successful
+ * sync — which is every install that never turns sharing on.
+ *
+ * Shown in Settings to EVERYONE, not just behind the developer toggle: on a shared profile
+ * the honest question "is what I am looking at current?" belongs to whoever is looking, and
+ * a stale record is exactly the thing a family member cannot otherwise detect. It is written
+ * only on success, so it means "the last time this phone actually had the others' changes"
+ * rather than "the last time it tried".
+ */
+export const META_LAST_SYNC_AT = 'last_sync_at';
 // The developer toggle's key is NOT declared here. It is `META_DEVLOG_ENABLED` in
 // `src/features/devlog/store.ts`, next to the only function allowed to write it. See the
 // note further down this file for what happened when there were two of them.
@@ -287,3 +299,19 @@ export async function setLanguagePref(language: string, tx?: Tx): Promise<void> 
  * the mirror and the row incapable of disagreeing in the direction that matters. Anything
  * that needs to know the state calls `isDevLogEnabled()`.
  */
+
+/** Epoch ms of the last SUCCESSFUL family-sharing pull, or null if it has never completed. */
+export async function getLastSyncAt(tx?: Tx): Promise<number | null> {
+  const raw = await readMeta(META_LAST_SYNC_AT, tx);
+  if (raw === null) return null;
+  const value = Number(raw);
+  // A malformed value reads as "never synced" rather than as a bogus date. Claiming a sync
+  // that did not happen is worse than admitting none did.
+  return Number.isFinite(value) && value > 0 ? value : null;
+}
+
+/** Records a successful pull. Call it only after the pull actually applied. */
+export async function setLastSyncAt(atEpochMs: number, tx?: Tx): Promise<void> {
+  await writeMeta(META_LAST_SYNC_AT, String(atEpochMs), tx);
+}
+
